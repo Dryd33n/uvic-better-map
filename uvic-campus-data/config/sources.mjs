@@ -5,7 +5,7 @@
 // Add a layer, add a field, pull from your own GeoJSON, add an enricher or an
 // output format: see docs/EXTENDING.md for recipes.
 // ─────────────────────────────────────────────────────────────────────────────
-import { washroomDetails, heightsFromFloors } from '../src/enrichers.mjs';
+import { washroomDetails, heightsFromFloors, overhangs, floorOutlines } from '../src/enrichers.mjs';
 
 const ARCGIS = 'https://services2.arcgis.com/qRqOFxxnwUHOSocZ/arcgis/rest/services';
 // Shorthand for an ArcGIS Online feature layer in UVic's org.
@@ -114,6 +114,8 @@ export default {
   enrich: [
     washroomDetails({ source: agol('UVIC_Washrooms_cm'), roomField: 'Room', fields: { gender: 'Gender', access: 'Accessibility', features: 'Features' } }),
     heightsFromFloors({ roof: 0.5 }),
+    overhangs(), // skyways and upper floors outside the ground footprint, for 3D
+    floorOutlines(), // each level's outline, for floor plates under the rooms
   ],
 
   // ── Audit ──────────────────────────────────────────────────────────────────

@@ -12,7 +12,8 @@ npm run validate   # check dist/ is consistent and valid GeoJSON
 npm run serve      # local server with CORS, http://localhost:8080
 ```
 
-Node 18 or newer. No dependencies to install.
+Node 18 or newer. Run `npm install` once: the build uses one dependency, `clipper-lib`, for the
+polygon unions behind `extras/overhangs.json`. The client library and templates have none.
 
 ## What you get
 
