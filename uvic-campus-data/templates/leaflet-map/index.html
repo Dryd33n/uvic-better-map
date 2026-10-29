@@ -1,0 +1,214 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>UVic Campus Map</title>
+<!-- Template: a 2D campus map with indoor floors, using Leaflet + the GeoJSON output + the client library. -->
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<style>
+  :root { --ink: #1d2421; --ink-2: #5b625e; --line: #dde0da; --panel: #ffffff; --accent: #2c6a8c; --soft: #e3eef4; --bg: #e4e7e0; color-scheme: light; }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; color: var(--ink); }
+  #map { position: absolute; inset: 0; background: var(--bg); }
+  .side { position: absolute; z-index: 1000; top: 12px; left: 12px; width: 320px; max-height: calc(100% - 24px); overflow: auto;
+    background: var(--panel); border: 1px solid var(--line); border-radius: 10px; box-shadow: 0 6px 20px rgba(0,0,0,.12); padding: 12px; }
+  .side h1 { font-size: 16px; margin: 0 0 8px; }
+  .side input { width: 100%; height: 36px; padding: 0 10px; border: 1px solid var(--line); border-radius: 7px; font: inherit; background: #fff; color: var(--ink); }
+  .results { list-style: none; margin: 6px 0 0; padding: 0; }
+  .results li { padding: 6px 8px; border-radius: 6px; cursor: pointer; }
+  .results li:hover { background: var(--soft); }
+  .results small, .muted { color: var(--ink-2); }
+  .info { margin-top: 10px; border-top: 1px solid var(--line); padding-top: 10px; }
+  .info h2 { font-size: 17px; margin: 0 0 4px; }
+  .levels { display: flex; flex-wrap: wrap; gap: 4px; margin: 8px 0; }
+  .levels button { min-width: 34px; height: 30px; border: 1px solid var(--line); background: #fff; border-radius: 6px; cursor: pointer; font: 500 12px ui-monospace, monospace; }
+  .levels button.on { background: var(--accent); color: #fff; border-color: var(--accent); }
+  .rooms { list-style: none; margin: 0; padding: 0; max-height: 240px; overflow: auto; border: 1px solid var(--line); border-radius: 6px; }
+  .rooms li { padding: 4px 8px; cursor: pointer; display: flex; gap: 8px; }
+  .rooms li:hover, .rooms li.on { background: var(--soft); }
+  .rooms b { font: 500 12px ui-monospace, monospace; min-width: 70px; }
+  .sw { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 4px; vertical-align: -1px; }
+  a { color: var(--accent); }
+  .room-label { background: none; border: 0; box-shadow: none; font: 500 10px ui-monospace, monospace; color: #333; padding: 0; }
+  .room-label::before { display: none; }
+  #map:not(.show-rooms) .room-label { display: none; }
+  .leaflet-popup-content table { border-collapse: collapse; }
+  .leaflet-popup-content td { padding: 1px 8px 1px 0; vertical-align: top; }
+  @media (max-width: 640px) { .side { right: 12px; width: auto; max-height: 45%; } }
+</style>
+</head>
+<body>
+<div id="map"></div>
+<aside class="side">
+  <h1>UVic campus</h1>
+  <input id="q" type="search" placeholder="Search buildings, rooms (ECS 125), amenities…" autocomplete="off">
+  <ul class="results" id="results"></ul>
+  <section class="info" id="info" hidden></section>
+</aside>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script type="module">
+import { openCampus } from '../../client/uvic-campus.mjs';
+
+// ── Settings you'll likely change ───────────────────────────────────────────
+const DATA = '../../dist/';
+// Off by default so the template needs no tile provider. To show OpenStreetMap underneath:
+// const BASEMAP = { url: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png', attribution: '© OpenStreetMap contributors', maxNativeZoom: 19 };
+const BASEMAP = null;
+const AREA_STYLE = {
+  boundary: { fillColor: '#eef0ea', color: '#cfd3cb', weight: 1 },
+  forest: { fillColor: '#c3d5b8', weight: 0 }, fields: { fillColor: '#acd09b', weight: 0 },
+  trails: { fillColor: '#ddd2ba', weight: 0 }, roads: { fillColor: '#cdd0ca', weight: 0 },
+  parking: { fillColor: '#d6d9d4', weight: 0 }, reserved: { fillColor: '#ccd2e0', weight: 0 }, shortParking: { fillColor: '#ccd2e0', weight: 0 },
+  walkways: { fillColor: '#fbfbf7', weight: 0 }, paths: { fillColor: '#fbfbf7', weight: 0 },
+  fountains: { fillColor: '#8fbcd6', weight: 0 }, construction: { fillColor: '#ebc595', color: '#c79b62', weight: 1, dashArray: '4 3' },
+};
+const LINE_STYLE = { fieldLines: { color: '#ffffff', weight: 1, opacity: 0.9 } };
+const POINT_COLOR = {
+  food: '#c2523a', microwaves: '#b07a12', showers: '#2f7fa8', aed: '#c0303f', naloxone: '#8a3fa0', phones: '#d0461e',
+  smoking: '#8a7f73', bikes: '#4d7a3a', bikeCentre: '#3f7d2b', ev: '#2b8a6e', motorcycle: '#7a5c3a', accessibleParking: '#1f6fbf',
+  atms: '#5a5f9a', bus: '#1f5f8b', access: '#2a6fb0', elevators: '#6b6f76', washrooms: '#3a6ea5',
+};
+const POINTS_ON = ['food', 'bus', 'washrooms'];
+const ROOM_COLOR = { 0: '#eceee9', 1: '#9fc6d4', 2: '#8fb0dc', 3: '#eab08a', 4: '#c4c7c1', 5: '#d5dedb' };
+const ROOM_LABEL_ZOOM = 19;
+
+// ── Setup ────────────────────────────────────────────────────────────────────
+const campus = await openCampus(DATA);
+const $ = (s) => document.querySelector(s);
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const ll = ([lon, lat]) => [lat, lon]; // GeoJSON is [lon, lat]; Leaflet wants [lat, lon]
+
+const map = L.map('map', { preferCanvas: true, maxZoom: 22, zoomSnap: 0.5 });
+for (const [name, z] of [['areas', 350], ['lines', 360], ['buildings', 400], ['rooms', 420], ['points', 450]]) map.createPane(name).style.zIndex = z;
+if (BASEMAP) L.tileLayer(BASEMAP.url, { attribution: BASEMAP.attribution, maxZoom: 22, maxNativeZoom: BASEMAP.maxNativeZoom }).addTo(map);
+const [W, S, E, N] = (await campus.layer('buildings')).features.reduce((b, f) => [Math.min(b[0], f.bbox[0]), Math.min(b[1], f.bbox[1]), Math.max(b[2], f.bbox[2]), Math.max(b[3], f.bbox[3])], [180, 90, -180, -90]);
+map.fitBounds([[S, W], [N, E]], { paddingTopLeft: [340, 20] });
+map.on('zoomend', () => map.getContainer().classList.toggle('show-rooms', map.getZoom() >= ROOM_LABEL_ZOOM));
+
+const overlays = {};
+const popupTable = (title, props) => `<b>${esc(title)}</b><table>${Object.entries(props)
+  .filter(([k, v]) => !['id', 'labelPoint'].includes(k) && typeof v !== 'object')
+  .map(([k, v]) => `<tr><td class="muted">${esc(k)}</td><td>${/^https?:/.test(v) ? `<a href="${esc(v)}" target="_blank" rel="noopener">link</a>` : esc(v)}</td></tr>`).join('')}</table>`;
+
+// Areas, in config order (the manifest preserves it).
+for (const key of campus.layerKeys({ kind: 'area' })) {
+  const style = { pane: 'areas', fillOpacity: 1, weight: 0, ...(AREA_STYLE[key] || { fillColor: '#ddd' }) };
+  overlays[campus.layerInfo(key).label] = L.geoJSON(await campus.layer(key), { pane: 'areas', style: () => style }).addTo(map);
+}
+for (const key of campus.layerKeys({ kind: 'line' })) {
+  overlays[campus.layerInfo(key).label] = L.geoJSON(await campus.layer(key), { pane: 'lines', style: () => LINE_STYLE[key] || { color: '#fff', weight: 1 } }).addTo(map);
+}
+
+// Buildings: click to open.
+const buildingById = new Map();
+const buildingStyle = (f, on) => ({ pane: 'buildings', fillColor: on ? '#cfe3ee' : f.properties.type === 'Secondary' ? '#ece9e2' : '#f7f5f0', fillOpacity: on ? 0.35 : 1, color: on ? '#2c6a8c' : '#a2a69f', weight: on ? 2 : 1 });
+const buildingsLayer = L.geoJSON(await campus.layer('buildings'), {
+  pane: 'buildings',
+  style: (f) => buildingStyle(f, false),
+  onEachFeature: (f, layer) => { buildingById.set(f.id, layer); layer.on('click', () => openBuilding(f.id)); },
+}).addTo(map);
+overlays.Buildings = buildingsLayer;
+
+// Point layers as small dots with popups.
+for (const key of campus.layerKeys({ kind: 'point' })) {
+  const color = POINT_COLOR[key] || '#555';
+  const lyr = L.geoJSON(await campus.layer(key), {
+    pane: 'points',
+    pointToLayer: (f, latlng) => L.circleMarker(latlng, { pane: 'points', radius: 6, color: '#fff', weight: 2, fillColor: color, fillOpacity: 1 }),
+    onEachFeature: (f, layer) => layer.bindPopup(popupTable(f.properties.name || campus.layerInfo(key).label, f.properties)),
+  });
+  overlays[`<span class="sw" style="background:${color}"></span>${esc(campus.layerInfo(key).label)}`] = lyr;
+  if (POINTS_ON.includes(key)) lyr.addTo(map);
+}
+L.control.layers(null, overlays, { collapsed: true }).addTo(map);
+
+// ── Buildings, floors and rooms ──────────────────────────────────────────────
+let current = null; // { id, level, roomsLayer, roomLayers: Map(roomId -> layer), selectedRoom }
+
+async function openBuilding(id, { level = null, room = null } = {}) {
+  if (current?.id !== id) closeBuilding();
+  const f = (await campus.layer('buildings')).features.find((x) => x.id === id);
+  if (!f) return;
+  buildingById.get(id)?.setStyle(buildingStyle(f, true));
+  const levels = campus.buildingLevels(id);
+  current = { id, level: null, roomsLayer: null, roomLayers: new Map(), selectedRoom: null };
+  const p = f.properties;
+  $('#info').hidden = false;
+  $('#info').innerHTML = `<h2>${esc(p.name || p.fullName || id)}</h2>
+    <div class="muted">${esc([p.code, p.number && `Building ${p.number}`, p.type].filter(Boolean).join(' · '))}</div>
+    ${p.about ? `<p>${esc(p.about)}</p>` : ''}
+    <p><a href="${campus.directionsUrl(p.labelPoint)}" target="_blank" rel="noopener">Walking directions</a>${p.link ? ` · <a href="${esc(p.link)}" target="_blank" rel="noopener">uvic.ca page</a>` : ''}</p>
+    ${levels.length ? `<div class="levels" id="levels">${levels.map((l) => `<button data-level="${esc(l.id)}" title="${esc(l.label)}">${esc(l.id)}</button>`).join('')}</div>
+      <div id="room-info" class="muted"></div><ul class="rooms" id="rooms"></ul>` : '<p class="muted">No floor plans for this building.</p>'}`;
+  $('#levels')?.addEventListener('click', (e) => { const b = e.target.closest('button[data-level]'); if (b) showLevel(b.dataset.level); });
+  map.fitBounds([[f.bbox[1], f.bbox[0]], [f.bbox[3], f.bbox[2]]], { paddingTopLeft: [340, 20], maxZoom: 19 });
+  if (levels.length) await showLevel(level || (levels.find((l) => l.id === '1') || levels.find((l) => l.elev >= 0) || levels[0]).id, room);
+}
+
+function closeBuilding() {
+  if (!current) return;
+  current.roomsLayer?.remove();
+  const layer = buildingById.get(current.id);
+  if (layer) layer.setStyle(buildingStyle(layer.feature, false));
+  current = null;
+}
+
+async function showLevel(levelId, roomName = null) {
+  const id = current.id;
+  const plan = await campus.floorPlan(id, { level: levelId });
+  if (current?.id !== id) return;
+  current.roomsLayer?.remove();
+  current.roomLayers.clear();
+  current.level = levelId;
+  document.querySelectorAll('#levels button').forEach((b) => b.classList.toggle('on', b.dataset.level === levelId));
+  current.roomsLayer = L.geoJSON(plan, {
+    pane: 'rooms',
+    style: (f) => ({ pane: 'rooms', fillColor: ROOM_COLOR[f.properties.type] ?? ROOM_COLOR[5], fillOpacity: 1, color: '#7d847e', weight: 0.6 }),
+    onEachFeature: (f, layer) => {
+      current.roomLayers.set(f.id, layer);
+      if (f.properties.name && f.properties.type !== 0) layer.bindTooltip(esc(f.properties.label || f.properties.name.replace(/^[A-Z]{2,6}\s+/i, '')), { permanent: true, direction: 'center', className: 'room-label', pane: 'rooms' });
+      layer.on('click', () => selectRoom(f));
+    },
+  }).addTo(map);
+  const named = plan.features.filter((f) => f.properties.name && f.properties.type !== 0)
+    .sort((a, b) => a.properties.name.localeCompare(b.properties.name, undefined, { numeric: true }));
+  $('#rooms').innerHTML = named.map((f) => `<li data-id="${esc(f.id)}"><b>${esc(f.properties.name)}</b><span><span class="sw" style="background:${ROOM_COLOR[f.properties.type] ?? ROOM_COLOR[5]}"></span>${esc(f.properties.label || f.properties.typeName || '')}</span></li>`).join('')
+    || '<li class="muted">No named rooms on this level.</li>';
+  $('#rooms').onclick = (e) => { const li = e.target.closest('li[data-id]'); if (li) selectRoom(plan.features.find((f) => f.id === li.dataset.id), true); };
+  $('#room-info').textContent = `${campus.levels.find((l) => l.id === levelId)?.label}: ${named.length} rooms`;
+  if (roomName) { const f = plan.features.find((x) => (x.properties.name || '').toUpperCase() === roomName.toUpperCase()); if (f) selectRoom(f, true); }
+}
+
+function selectRoom(f, zoom = false) {
+  if (current.selectedRoom) current.roomLayers.get(current.selectedRoom)?.setStyle({ color: '#7d847e', weight: 0.6 });
+  current.selectedRoom = f.id;
+  const layer = current.roomLayers.get(f.id);
+  layer?.setStyle({ color: '#2c6a8c', weight: 3 });
+  document.querySelectorAll('#rooms li').forEach((li) => li.classList.toggle('on', li.dataset.id === f.id));
+  const p = f.properties, w = p.washroom;
+  $('#room-info').innerHTML = `<b>${esc(p.name || p.typeName)}</b> · ${esc(p.typeName || 'Room')} · ${esc(p.levelLabel)}${p.label ? `<br>${esc(p.label)}` : ''}${w ? `<br>${esc([w.gender, w.access, w.features].filter(Boolean).join(' · '))}` : ''}${p.link ? `<br><a href="${esc(p.link)}" target="_blank" rel="noopener">More about this room</a>` : ''}`;
+  if (zoom && layer) map.fitBounds(layer.getBounds(), { paddingTopLeft: [340, 20], maxZoom: 21 });
+}
+
+// ── Search ──────────────────────────────────────────────────────────────────
+let results = [];
+$('#q').addEventListener('input', async (e) => {
+  results = await campus.search(e.target.value, { limit: 8 });
+  $('#results').innerHTML = results.map((r, i) => `<li data-i="${i}">${esc(r.label)}<br><small>${esc(r.kind)} · ${esc(r.detail)}</small></li>`).join('');
+});
+$('#results').addEventListener('click', async (e) => {
+  const li = e.target.closest('li[data-i]'); if (!li) return;
+  const r = results[+li.dataset.i];
+  $('#results').innerHTML = '';
+  if (r.kind === 'building') openBuilding(r.building);
+  else if (r.kind === 'room') openBuilding(r.building, { level: r.level, room: r.label });
+  else {
+    map.setView(ll(r.feature.geometry.coordinates), 19);
+    L.popup().setLatLng(ll(r.feature.geometry.coordinates)).setContent(popupTable(r.label, r.feature.properties)).openOn(map);
+  }
+});
+</script>
+</body>
+</html>

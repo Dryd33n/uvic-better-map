@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>UVic Room Finder</title>
+<!-- Template: no map at all. Shows the dataset is useful on its own: search, room details, directions. -->
+<style>
+  :root { --ink: #1d2421; --ink-2: #5b625e; --line: #dde0da; --accent: #2c6a8c; --soft: #e3eef4; --bg: #f4f5f2; color-scheme: light; }
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; color: var(--ink); background: var(--bg); }
+  main { max-width: 640px; margin: 0 auto; padding: 32px max(16px, env(safe-area-inset-left)) 48px max(16px, env(safe-area-inset-right)); }
+  h1 { font-size: 24px; margin: 0 0 4px; }
+  p.lead { margin: 0 0 16px; color: var(--ink-2); }
+  input { width: 100%; height: 44px; padding: 0 14px; font: inherit; border: 1px solid var(--line); border-radius: 8px; background: #fff; }
+  ul { list-style: none; margin: 8px 0 0; padding: 0; }
+  li { padding: 10px 12px; border-radius: 8px; cursor: pointer; display: grid; grid-template-columns: 1fr auto; gap: 2px 12px; }
+  li:hover, li:focus { background: var(--soft); outline: none; }
+  li b { font-weight: 600; }
+  li small { color: var(--ink-2); grid-column: 1; }
+  li em { font-style: normal; font-size: 12px; color: var(--ink-2); grid-row: 1; grid-column: 2; }
+  .card { margin-top: 20px; background: #fff; border: 1px solid var(--line); border-radius: 10px; padding: 18px; }
+  .card h2 { margin: 0 0 4px; font-size: 22px; }
+  .card dl { display: grid; grid-template-columns: auto 1fr; gap: 4px 16px; margin: 12px 0; }
+  .card dt { color: var(--ink-2); }
+  .card dd { margin: 0; }
+  .acts { display: flex; flex-wrap: wrap; gap: 8px; }
+  .acts a { padding: 8px 12px; border-radius: 7px; border: 1px solid var(--line); text-decoration: none; color: var(--ink); }
+  .acts a.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .muted { color: var(--ink-2); }
+</style>
+</head>
+<body>
+<main>
+  <h1>Room finder</h1>
+  <p class="lead" id="lead">Loading campus data…</p>
+  <input id="q" type="search" placeholder="Try ECS 125, Clearihue, or washroom" autocomplete="off" autofocus>
+  <ul id="results" role="listbox"></ul>
+  <section class="card" id="card" hidden></section>
+</main>
+<script type="module">
+import { openCampus } from '../../client/uvic-campus.mjs';
+
+const campus = await openCampus('../../dist/');
+const $ = (s) => document.querySelector(s);
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+$('#lead').textContent = `${campus.manifest.rooms?.count ?? 0} rooms in ${campus.buildingsWithFloors().length} buildings. Snapshot ${campus.manifest.builtAt.slice(0, 10)}.`;
+
+let results = [];
+$('#q').addEventListener('input', async (e) => {
+  results = await campus.search(e.target.value, { limit: 12, kinds: ['room', 'building'] });
+  $('#results').innerHTML = results.map((r, i) => `<li tabindex="0" data-i="${i}"><b>${esc(r.label)}</b><em>${r.kind}</em><small>${esc(r.detail)}</small></li>`).join('');
+});
+$('#results').addEventListener('click', (e) => { const li = e.target.closest('li[data-i]'); if (li) show(results[+li.dataset.i]); });
+$('#results').addEventListener('keydown', (e) => { if (e.key === 'Enter') { const li = e.target.closest('li[data-i]'); if (li) show(results[+li.dataset.i]); } });
+
+async function show(r) {
+  const card = $('#card');
+  if (r.kind === 'room') {
+    const room = r.room;
+    const level = campus.levels.find((l) => l.id === room.level);
+    const w = room.washroom;
+    const rows = [['Building', room.buildingName], ['Floor', level?.label], ['Type', room.typeName], ['Label', room.label],
+      ['Washroom', w && [w.gender, w.access, w.features].filter(Boolean).join(' · ')]].filter(([, v]) => v);
+    card.innerHTML = `<h2>${esc(room.name)}</h2>
+      <dl>${rows.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join('')}</dl>
+      <div class="acts">
+        <a class="primary" href="${campus.directionsUrl(room.labelPoint)}" target="_blank" rel="noopener">Walking directions</a>
+        <a href="../three-viewer/#b-${encodeURIComponent(room.building)}@${encodeURIComponent(room.level)}">Open floor in 3D</a>
+      </div>`;
+  } else {
+    const p = r.feature.properties;
+    const levels = campus.buildingLevels(r.building);
+    card.innerHTML = `<h2>${esc(p.name || p.fullName)}</h2>
+      <p class="muted">${esc([p.code, p.number && `Building ${p.number}`].filter(Boolean).join(' · '))}</p>
+      ${p.about ? `<p>${esc(p.about)}</p>` : ''}
+      ${levels.length ? `<p class="muted">Floors: ${levels.map((l) => esc(l.label)).join(', ')}</p>` : ''}
+      <div class="acts">
+        <a class="primary" href="${campus.directionsUrl(p.labelPoint)}" target="_blank" rel="noopener">Walking directions</a>
+        <a href="../three-viewer/#b-${encodeURIComponent(r.building)}">Open in 3D</a>
+        ${p.link ? `<a href="${esc(p.link)}" target="_blank" rel="noopener">uvic.ca page</a>` : ''}
+      </div>`;
+  }
+  card.hidden = false;
+}
+</script>
+</body>
+</html>

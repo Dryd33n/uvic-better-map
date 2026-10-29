@@ -1,0 +1,1226 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>UVic Campus 3D</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,700&family=IBM+Plex+Mono:wght@400;500&family=Public+Sans:wght@400;500;600&display=swap">
+<style>
+/* Layout: full-bleed map; floating search/layers panel top-left, info sheet bottom-left, map controls right. */
+:root {
+  --ground: #e2e5de; --land: #eceee8; --forest: #c6d6bb; --field: #b4d1a2; --trail: #ddd3bc;
+  --road: #cfd2cc; --walk: #f8f8f4; --parking: #dadcd8; --reserved: #d3d7e2; --water: #96c0d8; --construction: #e9c79c;
+  --bldg: #f7f5f0; --bldg-2: #e9e6df; --bldg-edge: #9fa39c; --shadow-alpha: 0.2;
+  --accent: #2c6a8c; --accent-ink: #ffffff; --accent-soft: #dcebf2;
+  --panel: #fcfcfa; --panel-line: #dde0da; --ink: #1c2320; --ink-2: #59615c; --ink-3: #868d88;
+  --elev: 0 1px 2px rgba(25, 35, 30, .08), 0 8px 24px rgba(25, 35, 30, .12);
+  --label-ink: #27302c; --label-halo: rgba(247, 248, 244, .92);
+  --line: #ffffff;
+  --rm-corr: #eceee9; --rm-class: #b9d5de; --rm-wash: #9dbbe0; --rm-food: #ecbf9f; --rm-stair: #c4c7c1; --rm-other: #d8e0dd; --rm-line: #8e958f;
+  --f-display: "Bricolage Grotesque", "Public Sans", system-ui, sans-serif;
+  --f-body: "Public Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --f-mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
+  --r: 10px;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --ground: #101413; --land: #161b19; --forest: #1d2a21; --field: #213322; --trail: #2a2922;
+    --road: #2a302d; --walk: #39413d; --parking: #262c2a; --reserved: #262c36; --water: #1d4153; --construction: #4b3b26;
+    --bldg: #545c57; --bldg-2: #424945; --bldg-edge: #1b201e; --shadow-alpha: 0.42;
+    --accent: #72b6da; --accent-ink: #0b1a22; --accent-soft: #1c3341;
+    --panel: #191f1d; --panel-line: #2c3531; --ink: #e5eae7; --ink-2: #a0aaa5; --ink-3: #6f7974;
+    --elev: 0 1px 2px rgba(0, 0, 0, .3), 0 10px 28px rgba(0, 0, 0, .45);
+    --line: #5f6b65;
+    --rm-corr: #262c2a; --rm-class: #2d4e59; --rm-wash: #2b4568; --rm-food: #6a4934; --rm-stair: #3b413e; --rm-other: #34403e; --rm-line: #0d1110;
+    --label-ink: #e9eeeb; --label-halo: rgba(16, 20, 19, .88);
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --ground: #101413; --land: #161b19; --forest: #1d2a21; --field: #213322; --trail: #2a2922;
+  --road: #2a302d; --walk: #39413d; --parking: #262c2a; --reserved: #262c36; --water: #1d4153; --construction: #4b3b26;
+  --bldg: #545c57; --bldg-2: #424945; --bldg-edge: #1b201e; --shadow-alpha: 0.42;
+  --accent: #72b6da; --accent-ink: #0b1a22; --accent-soft: #1c3341;
+  --panel: #191f1d; --panel-line: #2c3531; --ink: #e5eae7; --ink-2: #a0aaa5; --ink-3: #6f7974;
+  --elev: 0 1px 2px rgba(0, 0, 0, .3), 0 10px 28px rgba(0, 0, 0, .45);
+  --line: #5f6b65;
+  --rm-corr: #262c2a; --rm-class: #2d4e59; --rm-wash: #2b4568; --rm-food: #6a4934; --rm-stair: #3b413e; --rm-other: #34403e; --rm-line: #0d1110;
+  --label-ink: #e9eeeb; --label-halo: rgba(16, 20, 19, .88);
+  color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; }
+body { background: var(--ground); color: var(--ink); font: 14px/1.45 var(--f-body); overflow: hidden; -webkit-font-smoothing: antialiased; }
+button, input { font: inherit; color: inherit; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+#map { position: fixed; inset: 0; touch-action: none; }
+#map canvas { display: block; }
+#labels { position: fixed; inset: 0; pointer-events: none; overflow: hidden; }
+.lbl {
+  position: absolute; left: 0; top: 0; white-space: nowrap; will-change: transform;
+  font: 600 12px/1 var(--f-body); color: var(--label-ink); letter-spacing: .01em;
+  text-shadow: 0 0 2px var(--label-halo), 0 0 4px var(--label-halo), 0 0 6px var(--label-halo);
+}
+.lbl.minor { font-weight: 500; font-size: 11px; color: var(--ink-2); }
+.lbl.lot { font: 500 10.5px/1 var(--f-mono); color: var(--ink-2); letter-spacing: .04em; }
+.lbl.sel { color: var(--ink); font-weight: 700; font-size: 13px; }
+
+/* Panel */
+.panel {
+  position: fixed; z-index: 5;
+  top: calc(16px + env(safe-area-inset-top, 0px)); left: calc(16px + env(safe-area-inset-left, 0px));
+  width: 340px; max-height: calc(100% - 32px - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px));
+  display: flex; flex-direction: column;
+  background: var(--panel); border: 1px solid var(--panel-line); border-radius: var(--r); box-shadow: var(--elev);
+}
+.brand { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; padding: 14px 16px 10px; }
+.brand h1 { margin: 0; font: 700 19px/1.1 var(--f-display); letter-spacing: -.01em; }
+.brand h1 span { color: var(--accent); }
+.brand small { font: 400 11px/1 var(--f-mono); color: var(--ink-3); letter-spacing: .02em; }
+.search { position: relative; padding: 0 12px 12px; }
+.search input {
+  width: 100%; height: 40px; padding: 0 12px 0 36px; border-radius: 8px;
+  border: 1px solid var(--panel-line); background: var(--ground);
+}
+.search input::placeholder { color: var(--ink-3); }
+.search svg { position: absolute; left: 24px; top: 12px; width: 16px; height: 16px; color: var(--ink-3); pointer-events: none; }
+.search kbd {
+  position: absolute; right: 22px; top: 10px; font: 500 11px/18px var(--f-mono); padding: 0 6px;
+  border: 1px solid var(--panel-line); border-radius: 4px; color: var(--ink-3); background: var(--panel);
+}
+.results { list-style: none; margin: 0; padding: 0 8px 8px; overflow-y: auto; }
+.results:empty { display: none; }
+.results li {
+  display: grid; grid-template-columns: 28px 1fr; gap: 10px; align-items: center;
+  padding: 8px; border-radius: 8px; cursor: pointer;
+}
+.results li[aria-selected="true"], .results li:hover { background: var(--accent-soft); }
+.results .tag {
+  width: 28px; height: 28px; border-radius: 6px; display: grid; place-items: center;
+  font: 600 11px/1 var(--f-mono); color: #fff;
+}
+.results .t { font-weight: 600; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.results .s { color: var(--ink-2); font-size: 12px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.results .empty { display: block; padding: 10px 8px; color: var(--ink-2); cursor: default; }
+.results .empty:hover { background: none; }
+
+details.layers { border-top: 1px solid var(--panel-line); overflow-y: auto; min-height: 0; }
+details.layers > summary {
+  list-style: none; cursor: pointer; display: flex; justify-content: space-between; align-items: center;
+  padding: 11px 16px; font: 600 11px/1 var(--f-body); text-transform: uppercase; letter-spacing: .08em; color: var(--ink-2);
+}
+details.layers > summary::-webkit-details-marker { display: none; }
+details.layers > summary::after { content: ""; width: 8px; height: 8px; border-right: 1.5px solid currentColor; border-bottom: 1.5px solid currentColor; transform: rotate(45deg) translate(-2px, -2px); transition: transform .15s; }
+details.layers[open] > summary::after { transform: rotate(-135deg) translate(-2px, -2px); }
+.lgroup { padding: 0 8px 10px; }
+.lgroup h3 { margin: 4px 8px 4px; font: 500 11px/1.4 var(--f-body); color: var(--ink-3); display: flex; justify-content: space-between; }
+.lgroup h3 button { border: 0; background: none; padding: 0; color: var(--accent); cursor: pointer; font-size: 11px; }
+.lrow { display: grid; grid-template-columns: 18px 14px 1fr auto; gap: 10px; align-items: center; padding: 6px 8px; border-radius: 6px; cursor: pointer; }
+.lrow:hover { background: var(--accent-soft); }
+.lrow input { margin: 0; accent-color: var(--accent); width: 15px; height: 15px; }
+.lrow .sw { width: 14px; height: 14px; border-radius: 3px; border: 1px solid var(--panel-line); }
+.lrow .sw.pin { border-radius: 50%; border: 0; }
+.lrow .n { font: 400 11px/1 var(--f-mono); color: var(--ink-3); font-variant-numeric: tabular-nums; }
+
+/* Info sheet */
+.card {
+  position: fixed; z-index: 6; right: calc(16px + env(safe-area-inset-right, 0px)); top: calc(16px + env(safe-area-inset-top, 0px));
+  width: 340px; max-height: calc(100% - 200px); overflow-y: auto;
+  background: var(--panel); border: 1px solid var(--panel-line); border-radius: var(--r); box-shadow: var(--elev);
+  padding: 16px 16px 14px;
+}
+.card .x { position: absolute; right: 8px; top: 8px; width: 30px; height: 30px; border: 0; border-radius: 6px; background: none; cursor: pointer; color: var(--ink-2); font-size: 18px; line-height: 1; }
+.card .x:hover { background: var(--accent-soft); }
+.card .kick { font: 600 10.5px/1.3 var(--f-body); text-transform: uppercase; letter-spacing: .09em; color: var(--ink-2); display: flex; gap: 8px; align-items: center; padding-right: 32px; }
+.card .kick i { width: 9px; height: 9px; border-radius: 50%; display: inline-block; }
+.card .kick .code { font: 500 11px/1 var(--f-mono); letter-spacing: .03em; color: var(--accent); text-transform: none; }
+.card h2 { margin: 6px 0 10px; font: 700 22px/1.15 var(--f-display); letter-spacing: -.01em; text-wrap: balance; padding-right: 20px; }
+.card dl { display: grid; grid-template-columns: auto 1fr; gap: 6px 14px; margin: 0 0 12px; }
+.card dt { color: var(--ink-3); font-size: 12px; }
+.card dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+.card p.about { margin: 0 0 12px; color: var(--ink-2); max-width: 60ch; }
+.card .coord { font: 400 11.5px/1.4 var(--f-mono); color: var(--ink-3); margin-bottom: 12px; font-variant-numeric: tabular-nums; }
+.card .acts { display: flex; flex-wrap: wrap; gap: 8px; }
+.btn {
+  display: inline-flex; align-items: center; gap: 6px; height: 34px; padding: 0 12px; border-radius: 7px;
+  border: 1px solid var(--panel-line); background: var(--panel); cursor: pointer; text-decoration: none; color: var(--ink); font-weight: 500; font-size: 13px;
+}
+.btn:hover { border-color: var(--accent); }
+.btn.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+.card p.about.clamp { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+
+/* Floors: level switcher + room list inside the building card */
+.floors { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--panel-line); display: flex; flex-direction: column; gap: 10px; }
+.fhead { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+.fhead b { font: 600 11px/1 var(--f-body); text-transform: uppercase; letter-spacing: .08em; color: var(--ink-2); }
+.fhead span { font: 400 11px/1 var(--f-mono); color: var(--ink-3); font-variant-numeric: tabular-nums; }
+.levels { display: flex; gap: 4px; overflow-x: auto; padding-bottom: 2px; }
+.levels button {
+  flex: 0 0 auto; min-width: 38px; height: 34px; padding: 0 8px; border-radius: 7px; cursor: pointer;
+  border: 1px solid var(--panel-line); background: var(--panel); font: 500 13px/1 var(--f-mono); font-variant-numeric: tabular-nums;
+}
+.levels button:hover { border-color: var(--accent); }
+.levels button[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+.levels button.below:not([aria-pressed="true"]) { border-style: dashed; }
+.rfilter { height: 34px; padding: 0 10px; border-radius: 7px; border: 1px solid var(--panel-line); background: var(--ground); width: 100%; }
+.rfilter::placeholder { color: var(--ink-3); }
+.rlist { list-style: none; margin: 0; padding: 0; max-height: 260px; overflow-y: auto; border: 1px solid var(--panel-line); border-radius: 8px; }
+.rlist .grp {
+  position: sticky; top: 0; z-index: 1; display: flex; align-items: center; gap: 8px; padding: 6px 10px;
+  background: var(--panel); border-bottom: 1px solid var(--panel-line);
+  font: 600 10.5px/1.2 var(--f-body); text-transform: uppercase; letter-spacing: .08em; color: var(--ink-2);
+}
+.rlist .grp i { width: 10px; height: 10px; border-radius: 2px; border: 1px solid var(--rm-line); }
+.rlist .grp em { font: 400 10.5px/1 var(--f-mono); font-style: normal; color: var(--ink-3); margin-left: auto; letter-spacing: 0; }
+.rlist .rm { display: grid; grid-template-columns: 76px 1fr; gap: 8px; padding: 6px 10px; cursor: pointer; align-items: baseline; }
+.rlist .rm:hover, .rlist .rm[aria-selected="true"] { background: var(--accent-soft); }
+.rlist .rm b { font: 500 12px/1.3 var(--f-mono); font-variant-numeric: tabular-nums; }
+.rlist .rm span { color: var(--ink-2); font-size: 12px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rlist .none { padding: 12px 10px; color: var(--ink-2); }
+.rsel { border-radius: 8px; background: var(--accent-soft); padding: 10px 12px; display: grid; gap: 2px; position: relative; }
+.rsel b { font: 600 15px/1.2 var(--f-mono); }
+.rsel span { color: var(--ink-2); font-size: 12.5px; }
+.rsel a { color: var(--accent); font-size: 12.5px; }
+.rsel button { position: absolute; right: 6px; top: 6px; border: 0; background: none; cursor: pointer; color: var(--ink-2); font-size: 16px; width: 26px; height: 26px; border-radius: 5px; }
+.floors .muted { color: var(--ink-3); font-size: 12.5px; }
+.lbl.room { font: 500 10.5px/1 var(--f-mono); color: var(--ink-2); letter-spacing: .01em; }
+.lbl.room.on { color: var(--accent); font-weight: 600; }
+
+/* Map controls */
+.ctrls {
+  position: fixed; z-index: 4; right: calc(16px + env(safe-area-inset-right, 0px)); bottom: calc(16px + env(safe-area-inset-bottom, 0px));
+  display: flex; flex-direction: column; gap: 8px;
+}
+.cgroup { display: flex; flex-direction: column; background: var(--panel); border: 1px solid var(--panel-line); border-radius: var(--r); box-shadow: var(--elev); overflow: hidden; }
+.cgroup button { width: 40px; height: 40px; border: 0; background: none; cursor: pointer; display: grid; place-items: center; color: var(--ink); }
+.cgroup button + button { border-top: 1px solid var(--panel-line); }
+.cgroup button:hover { background: var(--accent-soft); }
+.cgroup svg { width: 18px; height: 18px; }
+#compass svg { transition: transform .05s linear; }
+#tilt { font: 600 11px/1 var(--f-mono); letter-spacing: .02em; }
+
+.credit {
+  position: fixed; z-index: 3; right: calc(68px + env(safe-area-inset-right, 0px)); bottom: calc(16px + env(safe-area-inset-bottom, 0px));
+  font: 400 10.5px/1.3 var(--f-mono); color: var(--ink-3); text-align: right; max-width: 46ch;
+  text-shadow: 0 0 3px var(--label-halo);
+}
+
+/* Loading + drop state */
+.state { position: fixed; inset: 0; z-index: 10; display: grid; place-items: center; padding: 24px max(16px, env(safe-area-inset-left, 0px)) 24px max(16px, env(safe-area-inset-right, 0px)); background: var(--ground); }
+.state .box { max-width: 460px; text-align: left; }
+.state h2 { font: 700 26px/1.1 var(--f-display); margin: 0 0 10px; }
+.state p { color: var(--ink-2); margin: 0 0 10px; }
+.state code { font: 500 12.5px/1.5 var(--f-mono); background: var(--panel); border: 1px solid var(--panel-line); padding: 1px 6px; border-radius: 4px; }
+.state .drop { margin-top: 16px; border: 1.5px dashed var(--ink-3); border-radius: var(--r); padding: 22px; text-align: center; color: var(--ink-2); }
+.state .drop.over { border-color: var(--accent); color: var(--accent); background: var(--accent-soft); }
+.state .drop label { color: var(--accent); cursor: pointer; text-decoration: underline; }
+
+@media (max-width: 640px) {
+  .panel { left: max(12px, env(safe-area-inset-left, 0px)); right: max(12px, env(safe-area-inset-right, 0px)); width: auto; top: calc(12px + env(safe-area-inset-top, 0px)); max-height: 62%; }
+  .brand { padding: 10px 14px 8px; }
+  .brand h1 { font-size: 17px; }
+  .search kbd { display: none; }
+  .card { left: max(12px, env(safe-area-inset-left, 0px)); right: max(12px, env(safe-area-inset-right, 0px)); width: auto; top: auto; bottom: calc(12px + env(safe-area-inset-bottom, 0px)); max-height: 46%; }
+  .ctrls { right: calc(12px + env(safe-area-inset-right, 0px)); bottom: calc(12px + env(safe-area-inset-bottom, 0px)); }
+  .card:not([hidden]) ~ .ctrls { display: none; }
+  .credit { display: none; }
+}
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+</head>
+<body>
+
+<div id="map" aria-label="3D campus map"></div>
+<div id="labels" aria-hidden="true"></div>
+
+<section class="panel" aria-label="Search and layers">
+  <div class="brand"><h1>UVic <span>Campus</span> 3D</h1><small id="stamp"></small></div>
+  <div class="search">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+    <input id="q" type="search" placeholder="Building, room (ECS 125), microwave…" autocomplete="off" spellcheck="false" aria-label="Search the campus" aria-controls="results">
+    <kbd>/</kbd>
+  </div>
+  <ul class="results" id="results" role="listbox"></ul>
+  <details class="layers" id="layers-box" open>
+    <summary>Layers</summary>
+    <div id="layers"></div>
+  </details>
+</section>
+
+<article class="card" id="card" hidden aria-live="polite"></article>
+
+<div class="ctrls">
+  <div class="cgroup">
+    <button id="compass" title="Point north up" aria-label="Point north up">
+      <svg viewBox="0 0 24 24"><path d="M12 3 16 12H8z" fill="var(--accent)"/><path d="M12 21 8 12h8z" fill="var(--ink-3)"/></svg>
+    </button>
+    <button id="tilt" title="Toggle 3D tilt" aria-label="Toggle 3D tilt">2D</button>
+  </div>
+  <div class="cgroup">
+    <button id="zin" title="Zoom in" aria-label="Zoom in"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg></button>
+    <button id="zout" title="Zoom out" aria-label="Zoom out"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M5 12h14"/></svg></button>
+    <button id="home" title="Show whole campus" aria-label="Show whole campus"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg></button>
+  </div>
+</div>
+<div class="credit" id="credit"></div>
+
+<div class="state" id="state">
+  <div class="box">
+    <h2>Loading campus…</h2>
+    <p>Reading the campus dataset.</p>
+  </div>
+</div>
+
+<script type="importmap">
+{ "imports": {
+  "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+} }
+</script>
+<script type="module">
+import * as THREE from 'three';
+import { MapControls } from 'three/addons/controls/MapControls.js';
+import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
+
+/* ---------- config ---------- */
+// Where the built dataset lives, relative to this page. This template reads the 'local' format:
+// campus.local.json (all outdoor layers) and floors/<BUILDING>.local.json (loaded on click).
+const DATA_BASE = '../../dist/';
+
+// Height order: HEIGHT_BY_CODE (yours) > height from the floor data (4 m per storey) > type default.
+const HEIGHT_BY_TYPE = { Main: 15, Secondary: 9 };
+const HEIGHT_DEFAULT = 11;
+const HEIGHT_BY_CODE = { /* e.g. CLE: 22, ELL: 18 */ };
+
+// Room types from the source web map's legend. List order = room list order.
+const ROOM_TYPES = [
+  { t: 1, name: 'Classrooms', one: 'Classroom', tok: '--rm-class' },
+  { t: 3, name: 'Food service', one: 'Food service', tok: '--rm-food' },
+  { t: 2, name: 'Washrooms', one: 'Washroom', tok: '--rm-wash' },
+  { t: 5, name: 'Other rooms', one: 'Room', tok: '--rm-other' },
+  { t: 4, name: 'Stairs and lifts', one: 'Stair or lift', tok: '--rm-stair' },
+  { t: 0, name: 'Corridors', one: 'Corridor', tok: '--rm-corr', hideInList: true },
+];
+const ROOM_TYPE = Object.fromEntries(ROOM_TYPES.map((r) => [r.t, r]));
+const FLOOR_SLAB = 0.25; // floor plate thickness, metres
+
+// Flat layers, bottom to top.
+const AREAS = [
+  ['boundary', '--land'], ['forest', '--forest'], ['fields', '--field'], ['trails', '--trail'],
+  ['roads', '--road'], ['parking', '--parking'], ['reserved', '--reserved'], ['shortParking', '--reserved'],
+  ['walkways', '--walk'], ['paths', '--walk'], ['fountains', '--water'], ['construction', '--construction'],
+];
+// Amenity pins: colour + glyph. Colours sit on a white ring so they read in both themes.
+const PINS = {
+  food:       { c: '#c2523a', g: 'F',  on: true },
+  microwaves: { c: '#b07a12', g: 'M',  on: true },
+  showers:    { c: '#2f7fa8', g: 'S',  on: false },
+  aed:        { c: '#c0303f', g: '+',  on: false },
+  naloxone:   { c: '#8a3fa0', g: 'N',  on: false },
+  phones:     { c: '#d0461e', g: 'E',  on: false },
+  bikes:      { c: '#4d7a3a', g: 'B',  on: false },
+  ev:         { c: '#2b8a6e', g: 'EV', on: false },
+  atms:       { c: '#5a5f9a', g: '$',  on: false },
+  bus:        { c: '#1f5f8b', g: 'T',  on: true },
+  access:     { c: '#2a6fb0', g: 'A',  on: false },
+  washrooms:  { c: '#3a6ea5', g: 'WC', on: false },
+  elevators:  { c: '#6b6f76', g: 'L',  on: false },
+  accessibleParking: { c: '#1f6fbf', g: 'P', on: false },
+  motorcycle: { c: '#7a5c3a', g: 'MC', on: false },
+  bikeCentre: { c: '#3f7d2b', g: 'BC', on: false },
+  smoking:    { c: '#8a7f73', g: 'S',  on: false },
+};
+// Line layers drawn on the ground, e.g. sport field markings.
+const LINES = [['fieldLines', '--line']];
+const GROUPS = [
+  { name: 'Buildings', keys: ['buildings', 'wings'], sw: '--bldg', on: true },
+  { name: 'Roads and parking', keys: ['roads', 'parking', 'reserved', 'shortParking', 'lots'], sw: '--parking', on: true },
+  { name: 'Walkways and trails', keys: ['walkways', 'paths', 'trails'], sw: '--walk', on: true },
+  { name: 'Green space', keys: ['forest', 'fields', 'fieldLines'], sw: '--field', on: true },
+  { name: 'Fountains', keys: ['fountains'], sw: '--water', on: true },
+  { name: 'Construction', keys: ['construction'], sw: '--construction', on: true },
+];
+
+/* ---------- helpers ---------- */
+const $ = (s) => document.querySelector(s);
+const css = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const toV3 = (x, y, h = 0) => new THREE.Vector3(x, h, -y); // map metres -> scene (north = -z)
+const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+/* ---------- data ---------- */
+async function loadData() {
+  if (window.CAMPUS_DATA) return window.CAMPUS_DATA;
+  const r = await fetch(`${DATA_BASE}campus.local.json`, { cache: 'no-cache' });
+  if (!r.ok) throw new Error(`${DATA_BASE}campus.local.json returned ${r.status}`);
+  return r.json();
+}
+
+function showDrop(err) {
+  const st = $('#state');
+  st.hidden = false;
+  st.innerHTML = `<div class="box">
+    <h2>No campus data yet</h2>
+    <p>This viewer reads <code>dist/campus.local.json</code>. From the package folder, run <code>npm run build</code>, then <code>npm run serve</code> and open <code>/templates/three-viewer/</code>.</p>
+    <p>Opening this file straight from disk blocks that read, which is why a server is needed.</p>
+    <div class="drop" id="drop">Or drop <code>campus.local.json</code> here, or <label for="file">choose the file</label><input id="file" type="file" accept=".json,application/json" hidden></div>
+    <p style="margin-top:12px;font-size:12px;color:var(--ink-3)">${esc(err?.message || '')}</p>
+  </div>`;
+  const drop = $('#drop');
+  const read = async (file) => { try { start(JSON.parse(await file.text())); } catch (e) { drop.textContent = 'That file is not valid campus JSON. Re-run the scraper and try again.'; } };
+  drop.addEventListener('dragover', (e) => { e.preventDefault(); drop.classList.add('over'); });
+  drop.addEventListener('dragleave', () => drop.classList.remove('over'));
+  drop.addEventListener('drop', (e) => { e.preventDefault(); drop.classList.remove('over'); const f = e.dataTransfer.files[0]; if (f) read(f); });
+  $('#file').addEventListener('change', (e) => { const f = e.target.files[0]; if (f) read(f); });
+}
+
+/* ---------- scene ---------- */
+const container = $('#map');
+const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+container.appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(38, 1, 5, 12000);
+const controls = new MapControls(camera, renderer.domElement);
+controls.enableDamping = true;
+controls.dampingFactor = 0.12;
+controls.screenSpacePanning = false;
+controls.minDistance = 35;
+controls.maxDistance = 3200;
+controls.maxPolarAngle = 1.2;
+controls.zoomToCursor = true;
+
+scene.add(new THREE.HemisphereLight(0xffffff, 0x8a9088, 1.35));
+const sun = new THREE.DirectionalLight(0xffffff, 1.6);
+sun.position.set(-500, 700, 350); // afternoon sun from the southwest
+sun.castShadow = true;
+sun.shadow.mapSize.set(4096, 4096);
+Object.assign(sun.shadow.camera, { left: -1000, right: 1000, top: 1000, bottom: -1000, near: 10, far: 2500 });
+sun.shadow.bias = -0.0004;
+scene.add(sun, sun.target);
+
+const ground = new THREE.Mesh(new THREE.PlaneGeometry(20000, 20000).rotateX(-Math.PI / 2), new THREE.MeshBasicMaterial({ depthWrite: false }));
+ground.renderOrder = 0;
+scene.add(ground);
+const shadowCatcher = new THREE.Mesh(new THREE.PlaneGeometry(4000, 4000).rotateX(-Math.PI / 2), new THREE.ShadowMaterial({ depthWrite: false }));
+shadowCatcher.position.y = 0.05;
+shadowCatcher.receiveShadow = true;
+shadowCatcher.renderOrder = 60;
+scene.add(shadowCatcher);
+
+/* ---------- state ---------- */
+let DATA = null;
+const areaLayers = {};      // key -> { mesh, starts:[tri start], feats }
+const buildingMeshes = [];  // Mesh with userData.feat
+const pinSprites = {};      // key -> Sprite[]
+const labelItems = [];      // { el, pos:Vector3, layer, prio, w, h, minor }
+const layerVisible = {};
+let selected = null;        // { kind, layer, feat, mesh? }
+let hovered = null;
+let dirty = true;
+
+function toShapes(polys) {
+  return polys.map((rings) => {
+    const toPts = (flat) => { const pts = []; for (let i = 0; i < flat.length; i += 2) pts.push(new THREE.Vector2(flat[i], flat[i + 1])); return pts; };
+    const shape = new THREE.Shape(toPts(rings[0]));
+    for (let i = 1; i < rings.length; i++) shape.holes.push(new THREE.Path(toPts(rings[i])));
+    return shape;
+  });
+}
+
+function buildAreas() {
+  AREAS.forEach(([key, tok], i) => {
+    const L = DATA.layers[key];
+    if (!L || !L.features.length) return;
+    const geos = [], starts = [];
+    let tri = 0;
+    for (const f of L.features) {
+      const g = new THREE.ShapeGeometry(toShapes(f.polys));
+      g.rotateX(-Math.PI / 2);
+      starts.push(tri);
+      tri += (g.index ? g.index.count : g.attributes.position.count) / 3;
+      geos.push(g);
+    }
+    const merged = mergeGeometries(geos, false);
+    geos.forEach((g) => g.dispose());
+    const mat = new THREE.MeshBasicMaterial({ side: THREE.DoubleSide, depthWrite: false, transparent: key === 'construction', opacity: key === 'construction' ? 0.8 : 1 });
+    const mesh = new THREE.Mesh(merged, mat);
+    mesh.renderOrder = 1 + i;
+    mesh.userData = { key, tok };
+    scene.add(mesh);
+    areaLayers[key] = { mesh, starts, feats: L.features };
+  });
+}
+
+const lineLayers = {};
+function buildLines() {
+  for (const [key, tok] of LINES) {
+    const L = DATA.layers[key];
+    if (!L?.features.length) continue;
+    const pos = [];
+    for (const f of L.features) for (const l of f.lines || []) {
+      for (let i = 0; i + 3 < l.length; i += 2) pos.push(l[i], 0, -l[i + 1], l[i + 2], 0, -l[i + 3]);
+    }
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+    const lines = new THREE.LineSegments(g, new THREE.LineBasicMaterial({ depthWrite: false, transparent: true, opacity: 0.85 }));
+    lines.position.y = 0.04;
+    lines.renderOrder = 20;
+    lines.userData = { tok };
+    scene.add(lines);
+    lineLayers[key] = lines;
+  }
+}
+
+function heightOf(p) { return HEIGHT_BY_CODE[p.code] ?? p.height ?? HEIGHT_BY_TYPE[p.type] ?? HEIGHT_DEFAULT; }
+
+const edgeMat = new THREE.LineBasicMaterial({ transparent: true, opacity: 0.7 });
+function buildBuildings() {
+  const L = DATA.layers.buildings;
+  if (!L) return;
+  for (const f of L.features) {
+    const h = heightOf(f.props);
+    const g = new THREE.ExtrudeGeometry(toShapes(f.polys), { depth: h, bevelEnabled: false });
+    g.rotateX(-Math.PI / 2);
+    const mat = new THREE.MeshLambertMaterial();
+    const mesh = new THREE.Mesh(g, mat);
+    mesh.castShadow = true;
+    mesh.renderOrder = 100;
+    const edges = new THREE.LineSegments(new THREE.EdgesGeometry(g, 25), edgeMat);
+    edges.renderOrder = 101;
+    mesh.add(edges);
+    mesh.userData = { feat: f, h, secondary: f.props.type === 'Secondary' };
+    scene.add(mesh);
+    buildingMeshes.push(mesh);
+  }
+}
+
+const pinTexCache = {};
+function pinTexture(key) {
+  if (pinTexCache[key]) return pinTexCache[key];
+  const { c, g } = PINS[key];
+  const s = 96, cv = document.createElement('canvas');
+  cv.width = cv.height = s;
+  const x = cv.getContext('2d');
+  x.beginPath(); x.arc(s / 2, s / 2, s / 2 - 4, 0, Math.PI * 2);
+  x.fillStyle = '#ffffff'; x.fill();
+  x.beginPath(); x.arc(s / 2, s / 2, s / 2 - 11, 0, Math.PI * 2);
+  x.fillStyle = c; x.fill();
+  x.fillStyle = '#ffffff';
+  x.font = `700 ${g.length > 1 ? 30 : 40}px "Public Sans", system-ui, sans-serif`;
+  x.textAlign = 'center'; x.textBaseline = 'middle';
+  x.fillText(g, s / 2, s / 2 + 2);
+  const t = new THREE.CanvasTexture(cv);
+  t.colorSpace = THREE.SRGBColorSpace;
+  t.anisotropy = 4;
+  return (pinTexCache[key] = t);
+}
+
+function buildPins() {
+  for (const key of Object.keys(PINS)) {
+    const L = DATA.layers[key];
+    if (!L) continue;
+    const mat = new THREE.SpriteMaterial({ map: pinTexture(key), depthTest: false, depthWrite: false, sizeAttenuation: false });
+    pinSprites[key] = L.features.map((f) => {
+      const s = new THREE.Sprite(mat);
+      s.position.copy(toV3(f.at[0], f.at[1], 2));
+      s.center.set(0.5, 0.5);
+      s.renderOrder = 200;
+      s.userData = { feat: f, layer: key };
+      scene.add(s);
+      return s;
+    });
+  }
+  sizePins();
+}
+function sizePins() {
+  const px = innerWidth < 640 ? 26 : 24; // on-screen diameter in CSS px
+  const k = px / innerHeight * 2 * Math.tan(THREE.MathUtils.degToRad(camera.fov / 2));
+  for (const arr of Object.values(pinSprites)) for (const s of arr) s.scale.set(k, k, 1);
+}
+
+function buildLabels() {
+  const host = $('#labels');
+  const add = (text, at, layer, prio, cls, h = 0, feat = null) => {
+    const el = document.createElement('div');
+    el.className = 'lbl' + (cls ? ' ' + cls : '');
+    el.textContent = text;
+    el.style.visibility = 'hidden';
+    host.appendChild(el);
+    labelItems.push({ el, pos: toV3(at[0], at[1], h), layer, prio, w: 0, h: 0, feat });
+  };
+  for (const m of buildingMeshes) {
+    const p = m.userData.feat.props;
+    const name = p.name || p.fullName || (p.code ? p.code : null);
+    if (!name || !m.userData.feat.at) continue;
+    add(name, m.userData.feat.at, 'buildings', m.userData.secondary ? 2 : 1, m.userData.secondary ? 'minor' : '', m.userData.h + 1, m.userData.feat);
+  }
+  for (const f of DATA.layers.wings?.features || []) if (f.props.name) add(f.props.name, f.at, 'wings', 3, 'minor', 6);
+  for (const f of DATA.layers.lots?.features || []) if (f.props.name) add(`Lot ${f.props.name}`.replace(/^Lot\s+lot\s*/i, 'Lot '), f.at, 'lots', 4, 'lot', 0.5);
+  for (const f of DATA.layers.fields?.features || []) if (f.props.name && f.at) add(f.props.name, f.at, 'fields', 3, 'minor', 0.5);
+  measureLabels();
+}
+function measureLabels() { for (const l of labelItems) { l.w = l.el.offsetWidth; l.h = l.el.offsetHeight; } }
+
+/* ---------- colours (theme) ---------- */
+function applyTheme() {
+  const col = (t) => new THREE.Color(css(t) || '#888');
+  scene.background = col('--ground');
+  ground.material.color = col('--ground');
+  shadowCatcher.material.opacity = parseFloat(css('--shadow-alpha')) || 0.2;
+  for (const { mesh } of Object.values(areaLayers)) mesh.material.color = col(mesh.userData.tok);
+  for (const l of Object.values(lineLayers)) l.material.color = col(l.userData.tok);
+  edgeMat.color = col('--bldg-edge');
+  paintBuildings();
+  if (interior?.F) { const r = interior.room?.n; showFloor(interior.F.id, { fly: false, room: r }); }
+  dirty = true;
+}
+function paintBuildings() {
+  const a = new THREE.Color(css('--accent')), b1 = new THREE.Color(css('--bldg')), b2 = new THREE.Color(css('--bldg-2'));
+  for (const m of buildingMeshes) {
+    const isSel = selected?.mesh === m, isHov = hovered === m;
+    const base = m.userData.secondary ? b2 : b1;
+    m.material.color.copy(isSel ? a : isHov ? base.clone().lerp(a, 0.28) : base);
+  }
+  for (const l of labelItems) l.el.classList.toggle('sel', !!selected && l.feat === selected.feat);
+  dirty = true;
+}
+
+/* ---------- layers panel ---------- */
+function setLayer(key, on) {
+  layerVisible[key] = on;
+  if (areaLayers[key]) areaLayers[key].mesh.visible = on;
+  if (lineLayers[key]) lineLayers[key].visible = on;
+  if (key === 'buildings') for (const m of buildingMeshes) m.visible = on;
+  if (pinSprites[key]) for (const s of pinSprites[key]) s.visible = on;
+  dirty = true;
+}
+function buildLayerPanel() {
+  const host = $('#layers');
+  const count = (keys) => keys.reduce((n, k) => n + (DATA.layers[k]?.features.length || 0), 0);
+  let html = '<div class="lgroup"><h3>Map</h3>';
+  GROUPS.forEach((g, i) => {
+    if (!count(g.keys)) return;
+    html += `<label class="lrow"><input type="checkbox" id="lg-${i}" data-group="${i}" ${g.on ? 'checked' : ''}><span class="sw" style="background:var(${g.sw})"></span><span>${esc(g.name)}</span><span class="n">${count(g.keys)}</span></label>`;
+  });
+  html += '</div><div class="lgroup"><h3><span>Amenities</span><span><button type="button" id="pins-all">All</button> · <button type="button" id="pins-none">None</button></span></h3>';
+  for (const [k, p] of Object.entries(PINS)) {
+    const L = DATA.layers[k];
+    if (!L?.features.length) continue;
+    html += `<label class="lrow"><input type="checkbox" id="lp-${k}" data-pin="${k}" ${p.on ? 'checked' : ''}><span class="sw pin" style="background:${p.c}"></span><span>${esc(L.label)}</span><span class="n">${L.features.length}</span></label>`;
+  }
+  host.innerHTML = html + '</div>';
+  host.addEventListener('change', (e) => {
+    const t = e.target;
+    if (t.dataset.group) GROUPS[+t.dataset.group].keys.forEach((k) => setLayer(k, t.checked));
+    if (t.dataset.pin) setLayer(t.dataset.pin, t.checked);
+  });
+  const setAllPins = (on) => host.querySelectorAll('[data-pin]').forEach((cb) => { cb.checked = on; setLayer(cb.dataset.pin, on); });
+  $('#pins-all').onclick = () => setAllPins(true);
+  $('#pins-none').onclick = () => setAllPins(false);
+  GROUPS.forEach((g) => g.keys.forEach((k) => setLayer(k, g.on)));
+  for (const [k, p] of Object.entries(PINS)) setLayer(k, p.on);
+  if (innerWidth < 640) $('#layers-box').open = false;
+}
+
+/* ---------- camera ---------- */
+let anim = null;
+function flyTo(center, dist, opts = {}) {
+  const target = toV3(center[0], center[1], opts.y || 0);
+  const dir = camera.position.clone().sub(controls.target).normalize();
+  if (opts.topDown) dir.set(0, 1, 0.0001).normalize();
+  if (opts.maxPolar != null) {
+    // Keep the current heading but look down at least this steeply (radians from vertical).
+    const s = new THREE.Spherical().setFromVector3(dir);
+    if (s.phi > opts.maxPolar) { s.phi = opts.maxPolar; dir.setFromSpherical(s).normalize(); }
+  }
+  dist = THREE.MathUtils.clamp(dist, controls.minDistance, controls.maxDistance);
+  const toPos = target.clone().add(dir.multiplyScalar(dist));
+  if (reduceMotion || opts.instant) { controls.target.copy(target); camera.position.copy(toPos); controls.update(); dirty = true; return; }
+  anim = { t0: performance.now(), dur: 750, fromT: controls.target.clone(), toT: target, fromP: camera.position.clone(), toP: toPos };
+}
+function fitDistance(w, h) {
+  const v = THREE.MathUtils.degToRad(camera.fov);
+  const span = Math.max(h, w / camera.aspect);
+  return (span / 2) / Math.tan(v / 2) * 1.25;
+}
+// Frame the core of campus: the 8th-92nd percentile of main-building positions,
+// so outlying residences and far-off parcels don't shrink the view.
+function campusBox() {
+  const feats = DATA.layers.buildings?.features || [];
+  let pts = feats.filter((f) => f.props.type !== 'Secondary' && f.at).map((f) => f.at);
+  if (pts.length < 5) pts = feats.filter((f) => f.at).map((f) => f.at);
+  const q = (a, p) => { const s = [...a].sort((x, y) => x - y); return s[Math.round(p * (s.length - 1))]; };
+  const xs = pts.map((p) => p[0]), ys = pts.map((p) => p[1]);
+  return [q(xs, 0.08), q(ys, 0.08), q(xs, 0.92), q(ys, 0.92)];
+}
+function goHome(instant) {
+  const [x0, y0, x1, y1] = campusBox();
+  const panelW = innerWidth >= 640 ? 356 : 0; // keep the campus clear of the side panel
+  const span = [(x1 - x0) * 1.15, (y1 - y0) * 1.15];
+  const fullW = span[0] * innerWidth / Math.max(innerWidth - panelW, 1);
+  const dist = fitDistance(fullW, span[1]);
+  const metresPerPx = (2 * dist * Math.tan(THREE.MathUtils.degToRad(camera.fov / 2))) / innerHeight;
+  const center = [(x0 + x1) / 2 - (panelW / 2) * metresPerPx, (y0 + y1) / 2];
+  const t = toV3(center[0], center[1]);
+  const toPos = t.clone().add(new THREE.Vector3(0, 1, 0.62).normalize().multiplyScalar(dist));
+  if (instant || reduceMotion) {
+    controls.target.copy(t);
+    camera.position.copy(toPos);
+    controls.update();
+    dirty = true;
+  } else anim = { t0: performance.now(), dur: 800, fromT: controls.target.clone(), toT: t, fromP: camera.position.clone(), toP: toPos };
+}
+
+/* ---------- selection + card ---------- */
+const latLon = ([x, y]) => {
+  const [lon0, lat0] = DATA.origin;
+  const lat = lat0 + y / 110574, lon = lon0 + x / (111320 * Math.cos(lat0 * Math.PI / 180));
+  return [lat, lon];
+};
+const fmtCoord = ([lat, lon]) => `${Math.abs(lat).toFixed(5)}° ${lat >= 0 ? 'N' : 'S'}, ${Math.abs(lon).toFixed(5)}° ${lon >= 0 ? 'E' : 'W'}`;
+const pinTitle = (layer, p) => p.name || p.building || DATA.layers[layer].label.replace(/s$/, '');
+
+// opts.floor / opts.room: open a building straight to a floor (and room), e.g. from search.
+function select(sel, { fly = true, floor = null, room = null } = {}) {
+  const sameBuilding = sel?.mesh && interior?.mesh === sel.mesh;
+  if (!sameBuilding) exitInterior();
+  selected = sel;
+  paintBuildings();
+  const card = $('#card');
+  if (!sel) { card.hidden = true; history.replaceState(null, '', location.pathname + location.search); return; }
+  const { layer, feat } = sel, p = feat.props, L = DATA.layers[layer];
+  const at = feat.at;
+  const dot = layer === 'buildings' ? 'var(--accent)' : PINS[layer]?.c || `var(${AREAS.find((a) => a[0] === layer)?.[1] || '--bldg-2'})`;
+  let kick = `<i style="background:${dot}"></i>${esc(L.label.replace(/s$/, ''))}`;
+  let title, rows = [], about = p.about;
+  const hasFloors = layer === 'buildings' && p.floors?.length && p.floorKey;
+  if (layer === 'buildings') {
+    title = p.name || p.fullName || 'Building';
+    if (p.code) kick += ` <span class="code">${esc(p.code)}</span>`;
+    if (p.fullName && p.fullName.toLowerCase() !== title.toLowerCase()) rows.push(['Full name', p.fullName]);
+    if (p.number) rows.push(['Building no.', p.number]);
+    if (p.type) rows.push(['Type', p.type]);
+  } else if (PINS[layer]) {
+    title = pinTitle(layer, p);
+    if (p.building && p.building !== title) rows.push(['Building', p.building]);
+    for (const [k, lab] of [['level', 'Floor'], ['room', 'Room'], ['where', 'Where'], ['lot', 'Lot'], ['bank', 'Bank'], ['kind', 'Type']]) if (p[k]) rows.push([lab, p[k]]);
+  } else {
+    title = p.name || (p.lot ? `Lot ${p.lot}` : L.label.replace(/s$/, ''));
+    if (p.sport && p.sport !== title) rows.push(['Sport', p.sport]);
+  }
+  const ll = at ? latLon(at) : null;
+  card.innerHTML = `<button class="x" id="card-x" aria-label="Close">×</button>
+    <div class="kick">${kick}</div>
+    <h2>${esc(title)}</h2>
+    ${rows.length ? `<dl>${rows.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join('')}</dl>` : ''}
+    ${about ? `<p class="about${hasFloors ? ' clamp' : ''}">${esc(about)}</p>` : ''}
+    ${ll ? `<div class="coord">${fmtCoord(ll)}</div>` : ''}
+    <div class="acts">
+      ${ll ? `<a class="btn primary" target="_blank" rel="noopener" href="https://www.google.com/maps/dir/?api=1&destination=${ll[0].toFixed(6)},${ll[1].toFixed(6)}&travelmode=walking">Walking directions</a>` : ''}
+      ${p.link && /^https?:/.test(p.link) ? `<a class="btn" target="_blank" rel="noopener" href="${esc(p.link)}">uvic.ca page</a>` : ''}
+    </div>
+    ${hasFloors ? `<section class="floors" id="floors" aria-label="Floors"><div class="muted">Loading floor plans…</div></section>` : ''}`;
+  card.hidden = false;
+  card.scrollTop = 0;
+  $('#card-x').onclick = () => select(null);
+  if (layer === 'buildings') history.replaceState(null, '', '#b-' + encodeURIComponent(p.code || feat.id));
+  if (hasFloors) { enterInterior(sel.mesh, { floor, room }); return; }
+  if (fly && at) {
+    const b = feat.bbox;
+    const d = b ? Math.max(fitDistance(b[2] - b[0], b[3] - b[1]) * 2.2, 280) : 260;
+    flyTo(at, d);
+  }
+}
+
+/* ---------- interior: floor plans ---------- */
+let interior = null; // { mesh, key, data, F, group, roomMesh, starts, rooms, hl, room, labels, filter }
+const floorCache = new Map();
+function loadFloorFile(key) {
+  if (!floorCache.has(key)) {
+    const p = window.CAMPUS_FLOORS
+      ? Promise.resolve(window.CAMPUS_FLOORS[key] || Promise.reject(new Error('no floor data')))
+      : fetch(`${DATA_BASE}floors/${encodeURIComponent(key)}.local.json`).then((r) => { if (!r.ok) throw new Error(`floor file returned ${r.status}`); return r.json(); });
+    floorCache.set(key, p);
+    p.catch(() => floorCache.delete(key));
+  }
+  return floorCache.get(key);
+}
+const shortRoom = (r) => (r.n || '').replace(/^[A-Za-z]{2,6}\s+/, '');
+const roomText = (r) => r.lbl || r.note || '';
+const defaultFloor = (floors) => (floors.find((f) => f.id === '1') || floors.find((f) => f.elev >= 0) || floors[0]).id;
+
+async function enterInterior(mesh, { floor = null, room = null } = {}) {
+  const key = mesh.userData.feat.props.floorKey;
+  let data;
+  try { data = await loadFloorFile(key); }
+  catch (e) {
+    if (selected?.mesh === mesh) { const s = $('#floors'); if (s) s.innerHTML = `<div class="muted">Floor plans for this building didn't load (${esc(e.message)}). Check that <code>${esc(DATA_BASE)}floors/${esc(key)}.local.json</code> exists.</div>`; }
+    return;
+  }
+  if (selected?.mesh !== mesh) return; // the person moved on while it loaded
+  if (!interior || interior.mesh !== mesh) {
+    interior = { mesh, key, data, labels: [], filter: '' };
+    mesh.material.transparent = true;
+    mesh.material.opacity = 0.13;
+    mesh.material.depthWrite = false;
+    mesh.material.needsUpdate = true; // transparency is compiled into the shader
+    mesh.castShadow = false;
+    mesh.renderOrder = 160;
+    mesh.children.forEach((c) => { c.visible = false; });
+  }
+  showFloor(floor && data.floors.some((f) => f.id === floor) ? floor : defaultFloor(data.floors), { room });
+}
+
+function clearFloor() {
+  if (!interior) return;
+  if (interior.group) {
+    interior.group.traverse((o) => { o.geometry?.dispose(); if (o.material && o !== interior.mesh) o.material.dispose?.(); });
+    scene.remove(interior.group);
+  }
+  clearRoomHighlight();
+  for (const l of interior.labels) { l.el.remove(); const i = labelItems.indexOf(l); if (i >= 0) labelItems.splice(i, 1); }
+  interior.labels = [];
+  interior.group = interior.roomMesh = null;
+  interior.room = null;
+}
+
+function exitInterior() {
+  if (!interior) return;
+  clearFloor();
+  const m = interior.mesh;
+  m.material.transparent = false;
+  m.material.opacity = 1;
+  m.material.depthWrite = true;
+  m.material.needsUpdate = true;
+  m.castShadow = true;
+  m.renderOrder = 100;
+  m.children.forEach((c) => { c.visible = true; });
+  interior = null;
+  dirty = true;
+}
+
+function showFloor(id, { fly = true, room = null } = {}) {
+  if (!interior) return;
+  clearFloor();
+  const F = interior.data.floors.find((f) => f.id === id) || interior.data.floors[0];
+  interior.F = F;
+  const y = F.elev + 0.05;
+  const geos = [], starts = [], linePos = [];
+  let tri = 0;
+  const colors = Object.fromEntries(ROOM_TYPES.map((r) => [r.t, new THREE.Color(css(r.tok))]));
+  for (const r of F.rooms) {
+    const g = new THREE.ExtrudeGeometry(toShapes(r.polys), { depth: FLOOR_SLAB, bevelEnabled: false });
+    g.rotateX(-Math.PI / 2);
+    const n = g.attributes.position.count, c = colors[r.t] || colors[5], arr = new Float32Array(n * 3);
+    for (let i = 0; i < n; i++) { arr[i * 3] = c.r; arr[i * 3 + 1] = c.g; arr[i * 3 + 2] = c.b; }
+    g.setAttribute('color', new THREE.BufferAttribute(arr, 3));
+    starts.push(tri);
+    tri += n / 3;
+    geos.push(g);
+    for (const poly of r.polys) for (const ring of poly) {
+      for (let i = 0; i < ring.length; i += 2) {
+        const j = (i + 2) % ring.length;
+        linePos.push(ring[i], FLOOR_SLAB + 0.02, -ring[i + 1], ring[j], FLOOR_SLAB + 0.02, -ring[j + 1]);
+      }
+    }
+  }
+  const group = new THREE.Group();
+  group.position.y = y;
+  if (geos.length) {
+    const merged = mergeGeometries(geos, false);
+    geos.forEach((g) => g.dispose());
+    const roomMesh = new THREE.Mesh(merged, new THREE.MeshLambertMaterial({ vertexColors: true }));
+    roomMesh.renderOrder = 150;
+    group.add(roomMesh);
+    interior.roomMesh = roomMesh;
+    const lg = new THREE.BufferGeometry();
+    lg.setAttribute('position', new THREE.Float32BufferAttribute(linePos, 3));
+    const lines = new THREE.LineSegments(lg, new THREE.LineBasicMaterial({ color: new THREE.Color(css('--rm-line')), transparent: true, opacity: 0.85 }));
+    lines.renderOrder = 151;
+    group.add(lines);
+  }
+  scene.add(group);
+  interior.group = group;
+  interior.starts = starts;
+  interior.rooms = F.rooms;
+
+  // Room number labels, shown when zoomed in.
+  const host = $('#labels');
+  for (const r of F.rooms) {
+    if (!r.n || r.t === 0 || r.t === 4 || !r.at) continue;
+    const el = document.createElement('div');
+    el.className = 'lbl room';
+    el.textContent = r.lbl || shortRoom(r);
+    el.style.visibility = 'hidden';
+    host.appendChild(el);
+    const item = { el, pos: toV3(r.at[0], r.at[1], y + FLOOR_SLAB + 0.3), layer: 'rooms', prio: 5, w: el.offsetWidth, h: el.offsetHeight, feat: r };
+    labelItems.push(item);
+    interior.labels.push(item);
+  }
+  renderFloorsPanel();
+  history.replaceState(null, '', `#b-${encodeURIComponent(interior.key)}@${encodeURIComponent(F.id)}`);
+  const target = room && F.rooms.find((r) => (r.n || '').toUpperCase() === room.toUpperCase());
+  if (target) selectRoom(target, { fly: !!fly });
+  else if (fly === 'keep') {
+    // Switching floors: keep the framing, glide up or down to the new floor.
+    flyTo([controls.target.x, -controls.target.z], controls.getDistance(), { y: F.elev });
+  } else if (fly) {
+    const b = interior.mesh.userData.feat.bbox;
+    // On desktop the search panel and the card cover ~740px, so fit the building into what's left.
+    const free = innerWidth >= 640 ? Math.max(innerWidth - 740, 320) / innerWidth : 1;
+    flyTo(interior.mesh.userData.feat.at, Math.max(fitDistance((b[2] - b[0]) / free, b[3] - b[1]) * 1.25, 150), { y: F.elev, maxPolar: 0.8 });
+  }
+  dirty = true;
+}
+
+function renderFloorsPanel() {
+  const host = $('#floors');
+  if (!host || !interior) return;
+  const { data, F } = interior;
+  const listed = F.rooms.filter((r) => r.n && !ROOM_TYPE[r.t]?.hideInList).length;
+  host.innerHTML = `
+    <div class="fhead"><b>${esc(F.label)}</b><span>${listed} rooms</span></div>
+    <div class="levels" role="group" aria-label="Choose a floor">
+      ${data.floors.map((f) => `<button type="button" data-floor="${esc(f.id)}" aria-pressed="${f.id === F.id}" class="${f.elev < 0 ? 'below' : ''}" title="${esc(f.label)}${f.elev < 0 ? ' (below ground)' : ''}">${esc(f.id)}</button>`).join('')}
+    </div>
+    <div id="rsel" hidden></div>
+    <input class="rfilter" id="rfilter" type="search" placeholder="Filter rooms on ${esc(F.label)}" autocomplete="off" aria-label="Filter rooms on this floor">
+    <ul class="rlist" id="rlist" role="listbox" aria-label="Rooms on ${esc(F.label)}"></ul>`;
+  host.querySelector('.levels').addEventListener('click', (e) => {
+    const b = e.target.closest('button[data-floor]');
+    if (b && b.dataset.floor !== interior.F.id) showFloor(b.dataset.floor, { fly: 'keep' });
+  });
+  const filter = $('#rfilter');
+  filter.value = interior.filter;
+  filter.addEventListener('input', () => { interior.filter = filter.value; renderRoomList(); });
+  $('#rlist').addEventListener('click', (e) => {
+    const li = e.target.closest('li[data-i]');
+    if (li) selectRoom(interior.rooms[+li.dataset.i], { fly: true });
+  });
+  renderRoomList();
+}
+
+function renderRoomList() {
+  const list = $('#rlist');
+  if (!list || !interior) return;
+  const q = interior.filter.trim().toLowerCase();
+  const html = [];
+  for (const T of ROOM_TYPES) {
+    if (T.hideInList) continue;
+    const rooms = interior.rooms.map((r, i) => [r, i])
+      .filter(([r]) => r.t === T.t && r.n && (!q || `${r.n} ${roomText(r)}`.toLowerCase().includes(q)))
+      .sort(([a], [b]) => a.n.localeCompare(b.n, undefined, { numeric: true }));
+    if (!rooms.length) continue;
+    html.push(`<li class="grp" role="presentation"><i style="background:var(${T.tok})"></i>${esc(T.name)}<em>${rooms.length}</em></li>`);
+    for (const [r, i] of rooms) {
+      html.push(`<li class="rm" role="option" data-i="${i}" aria-selected="${interior.room === r}"><b>${esc(shortRoom(r) || r.n)}</b><span>${esc(roomText(r) || (r.wash ? [r.wash.gender, r.wash.access].filter(Boolean).join(' · ') : ''))}</span></li>`);
+    }
+  }
+  list.innerHTML = html.length ? html.join('') : `<li class="none">${q ? `No rooms on this floor match “${esc(q)}”.` : 'No named rooms on this floor.'}</li>`;
+}
+
+function clearRoomHighlight() {
+  if (!interior?.hl) return;
+  interior.hl.geometry.dispose();
+  interior.hl.material.dispose();
+  interior.group?.remove(interior.hl);
+  interior.hl = null;
+}
+
+function selectRoom(r, { fly = false } = {}) {
+  if (!interior) return;
+  clearRoomHighlight();
+  interior.room = r;
+  for (const l of interior.labels) l.el.classList.toggle('on', l.feat === r);
+  const box = $('#rsel');
+  if (!r) { if (box) box.hidden = true; renderRoomList(); dirty = true; return; }
+  const g = new THREE.ExtrudeGeometry(toShapes(r.polys), { depth: FLOOR_SLAB + 0.12, bevelEnabled: false });
+  g.rotateX(-Math.PI / 2);
+  const hl = new THREE.Mesh(g, new THREE.MeshLambertMaterial({ color: new THREE.Color(css('--accent')) }));
+  hl.position.y = 0.01;
+  hl.renderOrder = 152;
+  interior.group.add(hl);
+  interior.hl = hl;
+  const T = ROOM_TYPE[r.t] || ROOM_TYPE[5];
+  const extra = [roomText(r), r.wash && [r.wash.gender, r.wash.access, r.wash.features].filter(Boolean).join(' · ')].filter(Boolean);
+  if (box) {
+    box.className = 'rsel';
+    box.innerHTML = `<button type="button" aria-label="Clear room">×</button><b>${esc(r.n || T.one)}</b><span>${esc(T.one)} · ${esc(interior.F.label)}</span>${extra.map((x) => `<span>${esc(x)}</span>`).join('')}${r.link ? `<a target="_blank" rel="noopener" href="${esc(r.link)}">More about this room</a>` : ''}`;
+    box.hidden = false;
+    box.querySelector('button').onclick = () => selectRoom(null);
+  }
+  renderRoomList();
+  // Bring the room's row into view inside the list only (scrollIntoView would also scroll the card).
+  const lst = $('#rlist'), row = lst?.querySelector('[aria-selected="true"]');
+  if (lst && row) {
+    const lr = lst.getBoundingClientRect(), rr = row.getBoundingClientRect();
+    if (rr.top < lr.top + 28 || rr.bottom > lr.bottom) lst.scrollTop += rr.top - lr.top - lr.height / 2 + rr.height / 2;
+  }
+  if (fly && r.at) flyTo(r.at, Math.min(Math.max(controls.getDistance() * 0.8, 70), 140), { y: interior.F.elev, maxPolar: 0.8 });
+  dirty = true;
+}
+
+function stepFloor(dir) {
+  if (!interior) return;
+  const fs = interior.data.floors, i = fs.indexOf(interior.F);
+  const n = fs[i + dir];
+  if (n) showFloor(n.id, { fly: 'keep' });
+}
+
+/* ---------- picking ---------- */
+const ray = new THREE.Raycaster();
+const ndc = new THREE.Vector2();
+function pick(ev) {
+  const r = renderer.domElement.getBoundingClientRect();
+  ndc.set(((ev.clientX - r.left) / r.width) * 2 - 1, -((ev.clientY - r.top) / r.height) * 2 + 1);
+  ray.setFromCamera(ndc, camera);
+  const sprites = Object.values(pinSprites).flat().filter((s) => s.visible);
+  const sh = ray.intersectObjects(sprites, false)[0];
+  if (sh) return { kind: 'pin', layer: sh.object.userData.layer, feat: sh.object.userData.feat };
+  if (interior?.roomMesh) {
+    const rh = ray.intersectObject(interior.roomMesh, false)[0];
+    if (rh) {
+      const S = interior.starts;
+      let lo = 0, hi = S.length - 1;
+      while (lo < hi) { const mid = (lo + hi + 1) >> 1; if (S[mid] <= rh.faceIndex) lo = mid; else hi = mid - 1; }
+      return { kind: 'room', room: interior.rooms[lo] };
+    }
+  }
+  const bh = ray.intersectObjects(buildingMeshes.filter((m) => m.visible && m !== interior?.mesh), false)[0];
+  if (bh) return { kind: 'building', layer: 'buildings', feat: bh.object.userData.feat, mesh: bh.object };
+  const named = ['construction', 'fields', 'reserved', 'parking', 'forest', 'roads', 'fountains'];
+  const meshes = named.map((k) => areaLayers[k]?.mesh).filter((m) => m?.visible);
+  const ah = ray.intersectObjects(meshes, false).sort((a, b) => b.object.renderOrder - a.object.renderOrder)[0];
+  if (ah) {
+    const { key } = ah.object.userData, A = areaLayers[key];
+    let lo = 0, hi = A.starts.length - 1;
+    while (lo < hi) { const mid = (lo + hi + 1) >> 1; if (A.starts[mid] <= ah.faceIndex) lo = mid; else hi = mid - 1; }
+    return { kind: 'area', layer: key, feat: A.feats[lo] };
+  }
+  return null;
+}
+let down = null;
+renderer.domElement.addEventListener('pointerdown', (e) => { down = { x: e.clientX, y: e.clientY }; });
+renderer.domElement.addEventListener('pointerup', (e) => {
+  if (!down || Math.hypot(e.clientX - down.x, e.clientY - down.y) > 5) return;
+  const hit = pick(e);
+  if (hit?.kind === 'room') { selectRoom(hit.room.t === 0 ? null : hit.room); return; }
+  select(hit, { fly: hit?.kind !== 'area' });
+});
+renderer.domElement.addEventListener('pointermove', (e) => {
+  if (e.pointerType !== 'mouse' || e.buttons) return;
+  const hit = pick(e);
+  const m = hit?.mesh || null;
+  renderer.domElement.style.cursor = hit && hit.kind !== 'area' && !(hit.kind === 'room' && hit.room.t === 0) ? 'pointer' : '';
+  if (m !== hovered) { hovered = m; paintBuildings(); }
+});
+
+/* ---------- search ---------- */
+let index = [];
+function buildIndex() {
+  index = [];
+  for (const m of buildingMeshes) {
+    const f = m.userData.feat, p = f.props;
+    const label = p.name || p.fullName; if (!label) continue;
+    index.push({ label, sub: [p.code, p.number && `Building ${p.number}`].filter(Boolean).join(' · '), tag: p.code || 'B', color: 'var(--accent)', hay: [label, p.fullName, p.code, p.number].filter(Boolean).join(' ').toLowerCase(), code: (p.code || '').toLowerCase(), sel: { kind: 'building', layer: 'buildings', feat: f, mesh: m }, rank: m.userData.secondary ? 1 : 0 });
+  }
+  for (const [k, pin] of Object.entries(PINS)) {
+    const L = DATA.layers[k]; if (!L) continue;
+    for (const f of L.features) {
+      const p = f.props, label = pinTitle(k, p);
+      const sub = [L.label.replace(/s$/, ''), p.building !== label && p.building, p.level, p.where].filter(Boolean).join(' · ');
+      index.push({ label, sub, tag: pin.g, color: pin.c, hay: [L.label, label, ...Object.values(p)].join(' ').toLowerCase(), code: '', sel: { kind: 'pin', layer: k, feat: f }, rank: 2 });
+    }
+  }
+  // Rooms: [name, buildingKey, floorId, type] rows from the snapshot.
+  const byKey = new Map(buildingMeshes.map((m) => [m.userData.feat.props.floorKey, m]).filter(([k]) => k));
+  const floorLabel = Object.fromEntries((DATA.floorList || []).map((f) => [f.id, f.label]));
+  for (const [name, key, floor, t] of DATA.rooms || []) {
+    const m = byKey.get(key); if (!m) continue;
+    const bp = m.userData.feat.props, T = ROOM_TYPE[t] || ROOM_TYPE[5];
+    index.push({ label: name, sub: [bp.name || bp.fullName, floorLabel[floor] || `Level ${floor}`, T.one].join(' · '), tag: 'Rm', color: `var(${T.tok})`, ink: 'var(--ink)',
+      hay: `${name} ${name.replace(/\s+/g, '')} ${bp.name || ''}`.toLowerCase(), code: '', sel: { kind: 'room', key, floor, name, mesh: m }, rank: 1.5 });
+  }
+  for (const k of ['fields', 'reserved', 'parking', 'construction']) {
+    for (const f of DATA.layers[k]?.features || []) {
+      const label = f.props.name || (f.props.lot ? `Lot ${f.props.lot}` : null); if (!label || !f.at) continue;
+      index.push({ label, sub: DATA.layers[k].label, tag: 'P', color: 'var(--ink-3)', hay: (label + ' ' + DATA.layers[k].label).toLowerCase(), code: '', sel: { kind: 'area', layer: k, feat: f }, rank: 3 });
+    }
+  }
+}
+let hits = [], cursor = -1;
+function runSearch(q) {
+  q = q.trim().toLowerCase();
+  const list = $('#results');
+  if (!q) { list.innerHTML = ''; hits = []; return; }
+  const toks = q.split(/\s+/);
+  hits = index.map((e) => {
+    if (!toks.every((t) => e.hay.includes(t))) return null;
+    let s = e.rank * 10;
+    if (e.code && e.code === q) s -= 100;
+    if (e.label.toLowerCase().startsWith(q)) s -= 30;
+    else if (e.label.toLowerCase().includes(q)) s -= 15;
+    return { e, s };
+  }).filter(Boolean).sort((a, b) => a.s - b.s || a.e.label.localeCompare(b.e.label)).slice(0, 8).map((h) => h.e);
+  cursor = hits.length ? 0 : -1;
+  list.innerHTML = hits.length
+    ? hits.map((h, i) => `<li role="option" id="r-${i}" data-i="${i}" aria-selected="${i === cursor}"><span class="tag" style="background:${h.color}${h.ink ? `;color:${h.ink}` : ''}">${esc(h.tag.slice(0, 3))}</span><span style="min-width:0"><div class="t">${esc(h.label)}</div><div class="s">${esc(h.sub)}</div></span></li>`).join('')
+    : `<li class="empty">Nothing on the map matches “${esc(q)}”.</li>`;
+}
+function choose(i) {
+  const h = hits[i]; if (!h) return;
+  const L = h.sel.layer;
+  if (PINS[L] && !layerVisible[L]) { setLayer(L, true); const cb = document.getElementById('lp-' + L); if (cb) cb.checked = true; }
+  if (h.sel.kind === 'room') {
+    const m = h.sel.mesh;
+    select({ kind: 'building', layer: 'buildings', feat: m.userData.feat, mesh: m }, { floor: h.sel.floor, room: h.sel.name });
+  } else select(h.sel);
+  $('#results').innerHTML = '';
+  $('#q').blur();
+}
+$('#q').addEventListener('input', (e) => runSearch(e.target.value));
+$('#q').addEventListener('keydown', (e) => {
+  if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+    e.preventDefault();
+    if (!hits.length) return;
+    cursor = (cursor + (e.key === 'ArrowDown' ? 1 : -1) + hits.length) % hits.length;
+    document.querySelectorAll('#results li').forEach((li, i) => li.setAttribute('aria-selected', i === cursor));
+  } else if (e.key === 'Enter') { e.preventDefault(); choose(Math.max(cursor, 0)); }
+  else if (e.key === 'Escape') { e.target.value = ''; runSearch(''); e.target.blur(); }
+});
+$('#results').addEventListener('click', (e) => { const li = e.target.closest('li[data-i]'); if (li) choose(+li.dataset.i); });
+addEventListener('keydown', (e) => {
+  if (e.key === '/' && document.activeElement !== $('#q')) { e.preventDefault(); $('#q').focus(); }
+  const typing = /^(INPUT|TEXTAREA)$/.test(document.activeElement?.tagName);
+  if (e.key === 'Escape' && !typing) { if (interior?.room) selectRoom(null); else select(null); }
+  if (interior && !typing && (e.key === 'PageUp' || e.key === ']')) { e.preventDefault(); stepFloor(1); }
+  if (interior && !typing && (e.key === 'PageDown' || e.key === '[')) { e.preventDefault(); stepFloor(-1); }
+});
+
+/* ---------- controls ---------- */
+$('#zin').onclick = () => flyTo([controls.target.x, -controls.target.z], controls.getDistance() * 0.6);
+$('#zout').onclick = () => flyTo([controls.target.x, -controls.target.z], controls.getDistance() * 1.6);
+$('#home').onclick = () => goHome(false);
+$('#compass').onclick = () => {
+  const d = controls.getDistance(), polar = controls.getPolarAngle();
+  const t = controls.target.clone();
+  const toP = t.clone().add(new THREE.Vector3(0, Math.cos(polar), Math.sin(polar)).multiplyScalar(d));
+  anim = { t0: performance.now(), dur: reduceMotion ? 1 : 500, fromT: t, toT: t, fromP: camera.position.clone(), toP };
+};
+$('#tilt').onclick = () => {
+  const flat = controls.getPolarAngle() < 0.1;
+  const d = controls.getDistance(), az = controls.getAzimuthalAngle(), polar = flat ? 0.9 : 0.001;
+  const t = controls.target.clone();
+  const toP = t.clone().add(new THREE.Vector3(Math.sin(polar) * Math.sin(az), Math.cos(polar), Math.sin(polar) * Math.cos(az)).multiplyScalar(d));
+  anim = { t0: performance.now(), dur: reduceMotion ? 1 : 600, fromT: t, toT: t, fromP: camera.position.clone(), toP };
+};
+
+/* ---------- labels (projected HTML, greedy de-overlap) ---------- */
+const tmp = new THREE.Vector3();
+function layoutLabels() {
+  const W = innerWidth, H = innerHeight, d = controls.getDistance();
+  const boxes = [];
+  const items = labelItems.filter((l) => {
+    if (l.layer === 'rooms') return d < 240 || l.feat === interior?.room;
+    if (!layerVisible[l.layer]) return false;
+    if (interior && d < 240 && l.layer !== 'buildings') return false; // let room numbers through
+    if (l.prio === 2 && d > 900) return false;
+    if (l.prio >= 3 && d > 520) return false;
+    return true;
+  }).sort((a, b) => {
+    const pin = (l) => (interior?.room && l.feat === interior.room ? 2 : selected && l.feat === selected.feat ? 1 : 0);
+    return pin(b) - pin(a) || a.prio - b.prio;
+  });
+  const shown = new Set();
+  for (const l of items) {
+    tmp.copy(l.pos).project(camera);
+    if (tmp.z > 1 || tmp.x < -1.1 || tmp.x > 1.1 || tmp.y < -1.1 || tmp.y > 1.1) continue;
+    const x = (tmp.x + 1) / 2 * W - l.w / 2, y = (1 - tmp.y) / 2 * H - l.h / 2;
+    const b = [x - 4, y - 2, x + l.w + 4, y + l.h + 2];
+    if (boxes.some((o) => b[0] < o[2] && b[2] > o[0] && b[1] < o[3] && b[3] > o[1])) continue;
+    boxes.push(b);
+    l.el.style.transform = `translate(${x.toFixed(1)}px, ${y.toFixed(1)}px)`;
+    shown.add(l);
+  }
+  for (const l of labelItems) l.el.style.visibility = shown.has(l) ? 'visible' : 'hidden';
+}
+
+/* ---------- loop ---------- */
+function resize() {
+  const w = innerWidth, h = innerHeight;
+  renderer.setSize(w, h);
+  camera.aspect = w / h;
+  camera.updateProjectionMatrix();
+  sizePins();
+  dirty = true;
+}
+addEventListener('resize', resize);
+const ease = (t) => (t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2);
+function frame(now) {
+  requestAnimationFrame(frame);
+  if (anim) {
+    const t = Math.min(1, (now - anim.t0) / anim.dur), k = ease(t);
+    controls.target.lerpVectors(anim.fromT, anim.toT, k);
+    camera.position.lerpVectors(anim.fromP, anim.toP, k);
+    if (t >= 1) anim = null;
+    dirty = true;
+  }
+  if (controls.update()) dirty = true;
+  if (!dirty || !DATA) return;
+  dirty = false;
+  renderer.render(scene, camera);
+  layoutLabels();
+  $('#compass svg').style.transform = `rotate(${THREE.MathUtils.radToDeg(controls.getAzimuthalAngle())}deg)`;
+  $('#tilt').textContent = controls.getPolarAngle() < 0.1 ? '3D' : '2D';
+}
+controls.addEventListener('change', () => { dirty = true; });
+
+const themeWatch = () => applyTheme();
+matchMedia('(prefers-color-scheme: dark)').addEventListener('change', themeWatch);
+new MutationObserver(themeWatch).observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
+
+/* ---------- boot ---------- */
+function start(data) {
+  if (DATA) return;
+  if (!data?.layers?.buildings) { showDrop(new Error('This JSON has no buildings layer. Use dist/campus.local.json.')); return; }
+  DATA = data;
+  $('#state').hidden = true;
+  buildAreas();
+  buildLines();
+  buildBuildings();
+  buildPins();
+  buildLabels();
+  buildLayerPanel();
+  buildIndex();
+  applyTheme();
+  resize();
+  goHome(true);
+  const when = new Date(DATA.scrapedAt);
+  $('#stamp').textContent = isNaN(when) ? '' : when.toISOString().slice(0, 10);
+  $('#credit').textContent = `Data: ${DATA.source || 'UVic campus map'}${isNaN(when) ? '' : `, snapshot ${when.toISOString().slice(0, 10)}`}. Heights estimated at 4 m per floor.`;
+  document.fonts?.ready.then(() => { measureLabels(); dirty = true; });
+  // #b-ECS opens a building; #b-ECS@3 opens it on Level 3.
+  const m = location.hash.match(/^#b-([^@]+)(?:@(.+))?$/);
+  if (m) {
+    const key = decodeURIComponent(m[1]).toLowerCase();
+    const mesh = buildingMeshes.find((b) => {
+      const p = b.userData.feat.props;
+      return [p.code, p.floorKey, String(b.userData.feat.id)].some((v) => v && String(v).toLowerCase() === key);
+    });
+    if (mesh) select({ kind: 'building', layer: 'buildings', feat: mesh.userData.feat, mesh }, { floor: m[2] ? decodeURIComponent(m[2]) : null });
+  }
+}
+requestAnimationFrame(frame);
+loadData().then(start).catch(showDrop);
+</script>
+</body>
+</html>

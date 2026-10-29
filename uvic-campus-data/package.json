@@ -1,0 +1,22 @@
+{
+  "name": "uvic-campus-data",
+  "version": "1.0.0",
+  "description": "UVic campus map data (buildings, paths, amenities, indoor floor plans) as GeoJSON and 3D-ready JSON, with a client library and app templates.",
+  "type": "module",
+  "license": "MIT",
+  "engines": { "node": ">=18" },
+  "exports": {
+    ".": "./src/index.mjs",
+    "./client": { "types": "./client/uvic-campus.d.ts", "default": "./client/uvic-campus.mjs" },
+    "./client/node": { "types": "./client/node.d.ts", "default": "./client/node.mjs" },
+    "./config": "./config/sources.mjs"
+  },
+  "files": ["src", "client", "config", "scripts", "templates", "examples", "docs", "dist"],
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "validate": "node scripts/validate.mjs",
+    "audit": "node scripts/audit.mjs",
+    "serve": "node scripts/serve.mjs",
+    "example": "node examples/node-query.mjs"
+  }
+}

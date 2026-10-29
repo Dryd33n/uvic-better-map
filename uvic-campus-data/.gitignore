@@ -1,0 +1,3 @@
+node_modules/
+# dist/ is build output. Commit it instead if you host straight from the repo (e.g. GitHub Pages).
+dist/
