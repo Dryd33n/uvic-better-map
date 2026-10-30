@@ -46,6 +46,34 @@ export const loaders = {
       return { id: f.id ?? f.properties?.id ?? i + 1, attrs: f.properties || {}, geometry };
     });
   },
+
+  // OpenStreetMap through the Overpass API: the query's elements, ways as paths, nodes as points,
+  // with their tags as attributes. `{{bbox}}` in the query becomes `bbox` ([south, west, north, east]).
+  // source: { type: 'osm', query: 'way["highway"]({{bbox}});', bbox, url?: 'https://overpass-api.de/api/interpreter' }
+  // Overpass refuses requests without an identifying User-Agent (HTTP 406), so this posts its own.
+  async osm(src) {
+    const query = `[out:json][timeout:90];(${src.query.replaceAll('{{bbox}}', src.bbox.join(','))});out body geom;`;
+    const url = src.url || 'https://overpass-api.de/api/interpreter';
+    let res;
+    for (let attempt = 1; ; attempt++) {
+      try {
+        const r = await fetch(url, { method: 'POST', body: new URLSearchParams({ data: query }), headers: { 'User-Agent': 'uvic-campus-data (https://github.com/Dryd33n/uvic-better-map)' } });
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        res = await r.json();
+        break;
+      } catch (e) {
+        // Busy (429/504) is common: back off and retry.
+        if (attempt >= 4) throw new Error(`Couldn't query Overpass (${url})\n  ${e.cause?.code || e.message}`);
+        await new Promise((s) => setTimeout(s, 2000 * attempt));
+      }
+    }
+    if (res.remark && !res.elements?.length) throw new Error(`Overpass: ${res.remark}`);
+    return (res.elements || []).flatMap((e) => {
+      if (e.type === 'way' && e.geometry?.length > 1) return [{ id: `w${e.id}`, attrs: e.tags || {}, geometry: { type: 'paths', paths: [e.geometry.map((p) => [p.lon, p.lat])] } }];
+      if (e.type === 'node') return [{ id: `n${e.id}`, attrs: e.tags || {}, geometry: { type: 'point', coords: [e.lon, e.lat] } }];
+      return [];
+    });
+  },
 };
 
 export async function loadSource(src, ctx) {

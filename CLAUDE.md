@@ -39,6 +39,8 @@ enrich list). The 3D-specific steps are custom enrichers:
   has rooms, merged into bands. Replaced the older `overhangs()` (still exported, not used).
 - `floorOutlines()` → `extras/floorOutlines.json`: each level's outline, for the floor plate.
 - `groundLines()` → `extras/groundLines.json`: ground layer outlines, unioned per group.
+- `walkGraph()` → `extras/walkGraph.json`: a line layer as a routable graph (`split` for drawn lines;
+  OSM is joined only at shared nodes, so not under bridges).
 - `foodOutlets()` names each food outlet's room (label + link) and tags the outlet with `room`/`level`;
   `rooms: { Starbucks: 'CSR 050' }` sets one by hand. Art's Place and University Club have no
   room: they show as a pinned spot on their building's ground floor.
@@ -123,16 +125,41 @@ Run `npx tsc --noEmit -p .` and `npx eslint app/campus` after changes.
   elevators, stairs, food, AEDs, naloxone, showers, microwaves (`app/campus/icons.ts`), then room
   names and numbers. Ranked and decluttered every frame. Rooms are selectable (click on the shown
   floor, or search): highlighted, with their own info panel; `&r=CLE+A101` in a view link.
-- Stairs and lifts (room type 4, `S3`/`L57` repeat across levels) get icons but aren't linked
-  between levels yet.
+- Stairs and lifts (room type 4, `S3`/`L57` repeat across levels) get icons; indoor routing links
+  them between levels by name.
 - Info panels have an emergency section (`app/campus/emergency.tsx`): nearest AED, naloxone kit and
-  emergency phone
-  (map distance + 25 m per floor), each a link to it. No exits yet: UVic publishes no building
-  entrance data (checked every web map layer and their ArcGIS org, Oct 2026); the user chose to
-  skip exits rather than infer them.
+  emergency phone by walking distance (+ 25 m per floor), each a link to it that draws the walk
+  as red dots (`showRoute`; hidden inside the selected building above the shown floor), with a
+  label at each end of a floor change ("↓ Level 1", "from Level 3"; only the shown floor's labels
+  in the selected building). Switching floors keeps the walk and its pin, so it can be followed
+  floor by floor. A walk from a room to another building keeps the room's building cut at its floor
+  (`showOrigin`, its own clipping plane), so both ends show their plans; cleared with the walk.
+  Walks start at the selected room; with only a building selected (where in it is unknown) its own
+  equipment is listed without a walk, and kinds it lacks are walked to from its nearest door.
+  Outdoors (`app/campus/walk.ts`) it runs on OpenStreetMap's walkable ways (`walkNetwork` layer,
+  `walkGraph()` → `extras/walkGraph.json`; the user chose OSM over UVic's ArcGIS walkway network
+  as more complete). Buildings are left and entered by doors (`indexDoors`): OSM's mapped
+  entrances (`entrances` layer, 68 on 21 buildings), the ends of OSM paths at a building's wall
+  (mappers draw paths up to doors; 28 of the 33 planned buildings have one or the other), and,
+  for buildings with plans, wall exits wherever a path passes within 10 m, at +15 m so real doors
+  win (a wing cut off from its doors, like SED's A wing, still leaves by the paths beside it).
+  Each door opens onto the level nearest the ground outside it. Indoors (`app/campus/indoor.ts`)
+  walks keep to corridors, as the user asked (they rejected routes cutting through rooms, hugging
+  walls and cutting through stairwells): floors on a 0.5 m grid; corridors 1×, rising to 3×
+  within 1 m of a wall (a distance transform), so walks take the middle; a corridor's 1 m reach
+  into the rooms beside it 4×; stairs and lifts 3× to walk through (entered to change floors);
+  other rooms 8× (only where nothing else connects: JCC's doors open into Mystic Market; the
+  start and end rooms are free, a door's room isn't); 25 m per storey. Paths are straightened
+  only over corridor at least 0.5 m from walls. A door the corridors can't reach is walked to from the best
+  corridor cell with a straight line over at most one mapped room (plans covering part of their
+  building, like CARSA). Check: every ground-floor room's exit crosses a median 0.0 m of other
+  rooms; the rest is mostly real (food courts, lobbies) or data (ISC level 1 has no corridors).
+  Buildings without plans walk straight to their doors or the nearest path. Planned next if it
+  works well: cross-campus navigation. Doors aren't shown as markers (the user had chosen to skip
+  exits rather than infer them).
 - Parking lot names (`lots` layer) are labels on the ground; floor plan markers win where they collide.
-- The lidar (Open Government Licence – Canada) needs an attribution line in the app before it's
-  public; it's only in the data README so far.
+- The lidar (Open Government Licence – Canada) and OpenStreetMap (ODbL: "© OpenStreetMap
+  contributors") need an attribution line in the app before it's public; neither is shown yet.
 - NRCan also publishes a 1 m surface model (DSM) in the same bucket: real building heights could
   come from it instead of the 4 m-per-storey estimate.
 - Gaps in floor data now show as lower roof (unmapped space reads as missing storey).

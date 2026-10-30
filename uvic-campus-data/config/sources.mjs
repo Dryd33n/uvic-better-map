@@ -5,12 +5,16 @@
 // Add a layer, add a field, pull from your own GeoJSON, add an enricher or an
 // output format: see docs/EXTENDING.md for recipes.
 // ─────────────────────────────────────────────────────────────────────────────
-import { washroomDetails, heightsFromFloors, massing, floorOutlines, groundLines, foodOutlets } from '../src/enrichers.mjs';
+import { washroomDetails, heightsFromFloors, massing, floorOutlines, groundLines, foodOutlets, walkGraph } from '../src/enrichers.mjs';
 import { terrain } from '../src/terrain.mjs';
 
 const ARCGIS = 'https://services2.arcgis.com/qRqOFxxnwUHOSocZ/arcgis/rest/services';
 // Shorthand for an ArcGIS Online feature layer in UVic's org.
 const agol = (service, layer = 0, extra = {}) => ({ type: 'arcgis', url: `${ARCGIS}/${encodeURIComponent(service)}/FeatureServer/${layer}`, ...extra });
+// An OpenStreetMap (Overpass) query over the campus: [south, west, north, east].
+const osm = (query) => ({ type: 'osm', query, bbox: [48.4534, -123.3264, 48.4724, -123.2935] });
+// OSM highway values people walk on.
+const WALKABLE = ['footway', 'path', 'pedestrian', 'steps', 'corridor', 'cycleway', 'track', 'living_street', 'residential', 'service', 'unclassified', 'tertiary', 'tertiary_link', 'secondary', 'secondary_link'];
 
 export default {
   name: 'uvic-campus-data',
@@ -68,6 +72,10 @@ export default {
     { key: 'accessibleParking', label: 'Accessible parking', kind: 'point', group: 'parking', source: agol('uvic_handicap_parking_cm'), fields: { lot: 'LotNum' } },
     { key: 'ev', label: 'EV charging', kind: 'point', group: 'transport', source: agol('uvic_ev_charging_feb'), fields: { lot: 'LotNum' } },
     { key: 'atms', label: 'ATMs', kind: 'point', group: 'amenities', source: agol('ATMs_uvic'), fields: { bank: 'bank' } },
+    // From OpenStreetMap (ODbL: credit "© OpenStreetMap contributors"), for route finding: every way
+    // you can walk (paths, steps, roads; not foot=no), and building entrances.
+    { key: 'walkNetwork', label: 'Walking network', kind: 'line', group: 'transport', source: osm(`way["highway"~"^(${WALKABLE.join('|')})$"]["foot"!="no"]["access"!="no"]({{bbox}});`), fields: { kind: 'highway', name: 'name' } },
+    { key: 'entrances', label: 'Entrances', kind: 'point', group: 'buildings', source: osm('node["entrance"]({{bbox}});'), fields: { kind: 'entrance', name: ['name', 'ref'], wheelchair: 'wheelchair' } },
     { key: 'bus', label: 'Bus stops', kind: 'point', group: 'transport', source: agol('Bus_Stops_feb'), fields: {} },
     { key: 'access', label: 'Accessibility', kind: 'point', group: 'amenities', source: agol('Accessibility_Training_3'), fields: { kind: 'Kind', about: 'Notes' } },
     { key: 'elevators', label: 'Elevators and lifts', kind: 'point', group: 'amenities', source: agol('Elevators_mar_cm'), fields: { category: 'Category', building: 'Building', access: 'Avaliability', number: 'FMNumber' } }, // sic
@@ -132,6 +140,9 @@ export default {
         water: ['fountains'],
       },
     }),
+    // The walking network as a routable graph. OSM ways join only where they share a node (so not
+    // under bridges); a few paths stop short of the next, so small gaps are bridged.
+    walkGraph({ layer: 'walkNetwork', split: false, snap: 0.05, bridge: 3 }),
     // Lidar ground heightfield, and each building's ground level. Overrides are Level 1 in metres
     // above sea level, where the median ground around a building puts it wrong.
     terrain({

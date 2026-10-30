@@ -247,6 +247,90 @@ export function floorOutlines({ name = 'floorOutlines', wallGap = 0.5, minArea =
 }
 
 /**
+ * A line layer as a walking graph, for route finding. Vertices within `snap` metres merge. Drawn
+ * lines (not noded: they cross without a shared vertex and stop just short of each other) want
+ * `split`: every segment is cut where another crosses it or ends within `snap` of it. Noded data
+ * like OpenStreetMap's, whose ways share a node only where they really join, doesn't (a path
+ * under a bridge isn't joined to it). Then each dead end joins the nearest node of another piece
+ * within `bridge` metres (smallest gaps first) so stray pieces connect. Written to
+ * extras/<name>.json as
+ *   { nodes: [x0, y0, x1, y1, ...], edges: [a0, b0, a1, b1, ...] }   (local metres, node indices)
+ */
+export function walkGraph({ name = 'walkGraph', layer = 'walkNetwork', split = true, snap = 1, bridge = 15 } = {}) {
+  return function walkGraphEnricher(ds, ctx) {
+    const lines = (ds.layers[layer]?.features || []).flatMap((f) => f.geom?.lines?.map((l) => l.xy) ?? []);
+    const segs = lines.flatMap((l) => l.slice(1).map((p, i) => [l[i], p]));
+    // Split points along each segment, as parameters 0..1.
+    const cuts = segs.map(() => [0, 1]);
+    const near = (p, [a, b]) => {
+      const dx = b[0] - a[0], dy = b[1] - a[1], len2 = dx * dx + dy * dy || 1;
+      const t = Math.max(0, Math.min(1, ((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / len2));
+      return { t, d: Math.hypot(p[0] - a[0] - t * dx, p[1] - a[1] - t * dy) };
+    };
+    for (let i = 0; split && i < segs.length; i++) {
+      const [a, b] = segs[i];
+      for (let j = i + 1; j < segs.length; j++) {
+        const [c, d] = segs[j];
+        if (Math.max(a[0], b[0]) + snap < Math.min(c[0], d[0]) || Math.max(c[0], d[0]) + snap < Math.min(a[0], b[0])) continue;
+        if (Math.max(a[1], b[1]) + snap < Math.min(c[1], d[1]) || Math.max(c[1], d[1]) + snap < Math.min(a[1], b[1])) continue;
+        const rx = b[0] - a[0], ry = b[1] - a[1], sx = d[0] - c[0], sy = d[1] - c[1];
+        const den = rx * sy - ry * sx;
+        if (den) {
+          const t = ((c[0] - a[0]) * sy - (c[1] - a[1]) * sx) / den, u = ((c[0] - a[0]) * ry - (c[1] - a[1]) * rx) / den;
+          if (t > 0 && t < 1 && u > 0 && u < 1) { cuts[i].push(t); cuts[j].push(u); continue; }
+        }
+        // An end of one segment just short of (or on) the other: a T junction.
+        for (const p of [c, d]) { const n = near(p, segs[i]); if (n.d <= snap && n.t > 0 && n.t < 1) cuts[i].push(n.t); }
+        for (const p of [a, b]) { const n = near(p, segs[j]); if (n.d <= snap && n.t > 0 && n.t < 1) cuts[j].push(n.t); }
+      }
+    }
+    // Vertices within `snap` share a node (a grid of `snap` cells, checking the neighbours).
+    const nodes = [], grid = new Map();
+    const nodeAt = (x, y) => {
+      const gx = Math.round(x / snap), gy = Math.round(y / snap);
+      for (let ox = -1; ox <= 1; ox++) for (let oy = -1; oy <= 1; oy++) {
+        for (const k of grid.get(`${gx + ox},${gy + oy}`) ?? []) if (Math.hypot(nodes[k][0] - x, nodes[k][1] - y) <= snap) return k;
+      }
+      const k = nodes.push([x, y]) - 1;
+      grid.set(`${gx},${gy}`, [...(grid.get(`${gx},${gy}`) ?? []), k]);
+      return k;
+    };
+    const edges = new Set();
+    const addEdge = (p, q) => { if (p !== q) edges.add(p < q ? `${p},${q}` : `${q},${p}`); };
+    segs.forEach(([a, b], i) => {
+      const ts = [...new Set(cuts[i])].sort((x, y) => x - y);
+      const ids = ts.map((t) => nodeAt(a[0] + t * (b[0] - a[0]), a[1] + t * (b[1] - a[1])));
+      for (let k = 1; k < ids.length; k++) addEdge(ids[k - 1], ids[k]);
+    });
+    // Pieces (union-find), then bridge dead ends to other pieces, smallest gap first.
+    const parent = nodes.map((_, i) => i);
+    const find = (i) => (parent[i] === i ? i : (parent[i] = find(parent[i])));
+    const degree = nodes.map(() => 0);
+    for (const e of edges) { const [p, q] = e.split(',').map(Number); parent[find(p)] = find(q); degree[p]++; degree[q]++; }
+    const gaps = [];
+    nodes.forEach((p, i) => {
+      if (degree[i] !== 1) return;
+      let best = -1, bestD = bridge;
+      nodes.forEach((q, j) => { const d = Math.hypot(p[0] - q[0], p[1] - q[1]); if (d <= bestD && find(i) !== find(j)) [best, bestD] = [j, d]; });
+      if (best >= 0) gaps.push([bestD, i, best]);
+    });
+    let bridged = 0;
+    for (const [, i, j] of gaps.sort((x, y) => x[0] - y[0])) {
+      if (find(i) === find(j)) continue;
+      addEdge(i, j);
+      parent[find(i)] = find(j);
+      bridged++;
+    }
+    const pieces = new Set(nodes.map((_, i) => find(i))).size;
+    ds.extras[name] = {
+      nodes: nodes.flat().map((v) => Math.round(v * 10) / 10),
+      edges: [...edges].flatMap((e) => e.split(',').map(Number)),
+    };
+    ctx.log(`${name}: ${nodes.length} nodes, ${edges.size} edges, ${bridged} gaps bridged, ${pieces} pieces`);
+  };
+}
+
+/**
  * The ground layers' outlines, for drawing as lines: each group's polygons unioned (no seams where
  * pieces abut) with building footprints cut away. Written to extras/<name>.json as
  *   { [group]: [ring, ...] }   flat [x0, y0, x1, y1, ...] rings in local metres, holes included
