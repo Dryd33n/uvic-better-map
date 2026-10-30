@@ -155,6 +155,7 @@ export default {
         VIA: 52.8, // Visual Arts: was 53.2
         PNX: 53.3, // Phoenix Building: was 52.4
         BWC: 59.2, // Bob Wright Centre: was 58.8
+        LIB: 57.9, // McPherson Library: was 57.8
       },
     }),
   ],

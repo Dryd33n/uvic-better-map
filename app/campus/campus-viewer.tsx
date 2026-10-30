@@ -4,10 +4,11 @@ import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "reac
 import * as THREE from "three";
 import { MapControls } from "three/addons/controls/MapControls.js";
 import { mergeGeometries } from "three/addons/utils/BufferGeometryUtils.js";
-import DebugPanel, { type DebugPoint, type DebugSnapshot } from "./debug-panel";
+import DebugPanel, { type DebugPoint, type DebugSnapshot, viewHash } from "./debug-panel";
 import { ICONS, type IconName } from "./icons";
 import EmergencySection, { SAFETY_LABELS, type Nearest } from "./emergency";
 import SearchBox, { type SearchItem } from "./search";
+import Sheet from "./sheet";
 import { THEMES, withEdits, type Palette, type ThemeEdits, type ThemeName } from "./theme";
 import { PANEL } from "./ui";
 import type { BuildingProps, CampusBundle, FloorFile, FloorOutlines, GroundLines, Level, LocalFeature, LocalPolygon, LocalRoom, Massing, Terrain } from "./types";
@@ -20,16 +21,30 @@ const floorUrl = (key: string) => `/campus/floors/${key}.local.json`;
 
 const GROUND_LINES_URL = "/campus/extras/groundLines.json";
 
-// Ground layers, bottom to top: filled into the ground texture in the theme's colours.
+// Ground layers, bottom to top, in the theme's colours.
 const AREAS = ["boundary", "forest", "fields", "trails", "roads", "parking", "reserved", "shortParking", "walkways", "paths", "fountains", "construction"];
+// All but the campus land are draped on the terrain as geometry (sharp edges); the land stays in
+// the ground texture, its edge being far from anything.
+const DRAPED_AREAS = AREAS.filter((key) => key !== "boundary");
 // The ground layers' outlines (extras/groundLines.json), drawn as lines over the fills.
 const GROUND_LINES = ["boundary", "green", "trails", "roads", "parking", "paths", "water"];
 
 // The ground layers are drawn into this texture, then draped over the terrain.
 const GROUND_TEXTURE = 4096;
-// Ground outlines are sampled this often along their edges and drawn this far above the terrain.
+// The map's edge: a rounded rectangle this far inside the terrain (m), with corners this round,
+// that everything fades out over the last EDGE_FADE metres of.
+const EDGE_INSET = 40;
+const EDGE_RADIUS = 300;
+const EDGE_FADE = 220;
+// The terrain is kept where the footprint mask is at least this (1 ground, 0 under a building).
+const HOLE_CUTOFF = 0.1;
+// Basement dig walls are cut into pieces this long so they follow the ground.
 const LINE_STEP = 2;
+// Map labels on the ground sit this far up.
 const LINE_LIFT = 0.2;
+// Ground outlines lie exactly on the terrain and are drawn this fraction of their distance nearer
+// the camera, so they win over the fills under them without floating.
+const LINE_BIAS = 0.002;
 // Building edges: corners turning less than this stay unlined (curved walls).
 const EDGE_TURN = 0.3;
 // Building walls run this far below their lowest level or the lowest ground beside them, so they
@@ -90,8 +105,8 @@ const CHIP_CLASS = "grid h-[18px] w-[18px] place-items-center rounded bg-zinc-80
 const ACCESSIBLE_CHIP_CLASS = "grid h-[18px] w-[18px] place-items-center rounded bg-sky-700 text-white shadow-sm dark:bg-sky-400 dark:text-zinc-950";
 const CAP_LIFT = 0.02; // above the cut, so the cap closes the chopped walls
 const SLAB_LIFT = 0.05;
-// Room outlines sit clear of the plate, which is depth-biased toward the camera.
-const ROOM_LIFT = 0.25;
+// Room outlines lie on the floor plate (no visible float) and win over it by a depth bias (nearer).
+const ROOM_LIFT = 0.06;
 const NO_CUT = 1e6;
 const THEME_KEY = "campus-theme";
 function readThemeStored(): ThemeName {
@@ -349,12 +364,47 @@ function edgeLines(blocks: { polys: LocalPolygon[]; from: number; to: number }[]
   return g;
 }
 
-// Adds the world grid to the terrain's material: lines every gridSpacing and gridMajorSpacing
-// metres in world x/z (turned by gridAngle), faded
-// out where they'd be closer together than a few pixels.
-function withGrid(material: THREE.MeshLambertMaterial, uniforms: { gridColor: { value: THREE.Color }; gridMinor: { value: number }; gridMajor: { value: number }; gridAngle: { value: number }; gridSpacing: { value: number }; gridMajorSpacing: { value: number } }) {
+type GridUniforms = { gridColor: { value: THREE.Color }; gridMinor: { value: number }; gridMajor: { value: number }; gridAngle: { value: number }; gridSpacing: { value: number }; gridMajorSpacing: { value: number } };
+type MaskUniforms = { maskMap: { value: THREE.Texture | null }; maskBox: { value: THREE.Vector4 }; maskCutoff: { value: number } };
+type ClipUniforms = { clipBox: { value: THREE.Vector4 }; clipRadius: { value: number }; clipFade: { value: number }; clipColor: { value: THREE.Color } };
+
+// The map's edge: a rounded rectangle (clipBox = centre x, y and half width, height in local
+// metres, corners of clipRadius) that everything fades into clipColor (the sky) towards, over
+// clipFade metres, and is cut off beyond. Chains onto any shader change the material already has.
+function withClip(material: THREE.Material, u: ClipUniforms) {
+  const prev = material.onBeforeCompile;
+  const key = material.customProgramCacheKey();
+  material.customProgramCacheKey = () => key + "|clip";
+  material.onBeforeCompile = (shader, renderer) => {
+    prev.call(material, shader, renderer);
+    Object.assign(shader.uniforms, u);
+    shader.vertexShader = shader.vertexShader
+      .replace("#include <common>", "#include <common>\nvarying vec2 vClip;")
+      .replace("#include <project_vertex>", "#include <project_vertex>\nvClip = (modelMatrix * vec4(transformed, 1.0)).xz * vec2(1.0, -1.0);");
+    shader.fragmentShader = shader.fragmentShader
+      .replace("#include <common>", "#include <common>\nvarying vec2 vClip;\nuniform vec4 clipBox;\nuniform float clipRadius, clipFade;\nuniform vec3 clipColor;")
+      .replace(
+        "#include <fog_fragment>",
+        `#include <fog_fragment>
+{
+  vec2 q = abs(vClip - clipBox.xy) - clipBox.zw + clipRadius;
+  float d = length(max(q, 0.0)) + min(max(q.x, q.y), 0.0) - clipRadius;
+  if (d > 0.0) discard;
+  gl_FragColor.rgb = mix(gl_FragColor.rgb, clipColor, smoothstep(-clipFade, 0.0, d));
+}`,
+      );
+  };
+}
+
+// Adds the world grid to a ground material: lines every gridSpacing and gridMajorSpacing metres in
+// world x/z (turned by gridAngle), faded out where they'd be closer together than a few pixels.
+// With a mask (the footprint texture over maskBox = x0, y0, width, height in local metres), it also
+// cuts the same holes the terrain has: under buildings, and over a dug-out basement.
+function withGrid(material: THREE.MeshLambertMaterial, uniforms: GridUniforms, mask?: MaskUniforms) {
+  // Shaders are cached by this key: one per variant, not shared with unchanged materials.
+  material.customProgramCacheKey = () => (mask ? "grid+mask" : "grid");
   material.onBeforeCompile = (shader) => {
-    Object.assign(shader.uniforms, uniforms);
+    Object.assign(shader.uniforms, uniforms, mask);
     shader.vertexShader = shader.vertexShader
       .replace("#include <common>", "#include <common>\nvarying vec2 vGrid;")
       .replace("#include <begin_vertex>", "#include <begin_vertex>\nvGrid = (modelMatrix * vec4(transformed, 1.0)).xz;");
@@ -376,9 +426,144 @@ float gridLine(vec2 p, float size) {
         "#include <map_fragment>",
         `#include <map_fragment>
 vec2 gp = mat2(cos(gridAngle), sin(gridAngle), -sin(gridAngle), cos(gridAngle)) * vGrid;
-diffuseColor.rgb = mix(diffuseColor.rgb, gridColor, max(gridLine(gp, gridSpacing) * gridMinor, gridLine(gp, gridMajorSpacing) * gridMajor));`,
-      );
+diffuseColor.rgb = mix(diffuseColor.rgb, gridColor, max(gridLine(gp, gridSpacing) * gridMinor, gridLine(gp, gridMajorSpacing) * gridMajor));${
+          mask ? "\nif (texture2D(maskMap, (vec2(vGrid.x, -vGrid.y) - maskBox.xy) / maskBox.zw).g < maskCutoff) discard;" : ""
+        }`,
+      )
+      .replace("uniform float gridMinor,", `${mask ? "uniform sampler2D maskMap;\nuniform vec4 maskBox;\nuniform float maskCutoff;\n" : ""}uniform float gridMinor,`);
   };
+}
+
+// Closed rings laid exactly on the terrain mesh as line segments: each edge is cut where it crosses
+// a terrain triangle's edge (the grid lines and the cells' diagonals), so every piece lies on one
+// triangle and needs no lift above it.
+function drapeLines(rings: number[][], t: Terrain): THREE.BufferGeometry {
+  const p: number[] = [];
+  const h = (x: number, y: number) => heightAt(t, x, y) - t.ref;
+  for (const r of rings) {
+    for (let k = 0; k < r.length; k += 2) {
+      const [ax, ay, bx, by] = [r[k], r[k + 1], r[(k + 2) % r.length], r[(k + 3) % r.length]];
+      const [u0, v0, u1, v1] = [(ax - t.x0) / t.cell, (ay - t.y0) / t.cell, (bx - t.x0) / t.cell, (by - t.y0) / t.cell];
+      const cuts = [0, 1];
+      // Where u, v or u - v passes a whole number along the edge.
+      for (const [a, b] of [[u0, u1], [v0, v1], [u0 - v0, u1 - v1]]) {
+        if (a === b) continue;
+        for (let n = Math.ceil(Math.min(a, b)); n <= Math.floor(Math.max(a, b)); n++) cuts.push((n - a) / (b - a));
+      }
+      cuts.sort((x, y) => x - y);
+      for (let i = 0; i + 1 < cuts.length; i++) {
+        if (cuts[i + 1] - cuts[i] < 1e-6) continue;
+        const [px, py] = [ax + (bx - ax) * cuts[i], ay + (by - ay) * cuts[i]];
+        const [qx, qy] = [ax + (bx - ax) * cuts[i + 1], ay + (by - ay) * cuts[i + 1]];
+        p.push(px, h(px, py), -py, qx, h(qx, qy), -qy);
+      }
+    }
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute("position", new THREE.Float32BufferAttribute(p, 3));
+  return g;
+}
+
+// Draws a material's geometry `bias` of its distance nearer the camera: a depth offset for lines
+// lying on a surface (polygon offset only works on faces). Scales with distance, so it never lets a
+// line show through a hill or building.
+function nearer<M extends THREE.Material>(material: M, bias: number): M {
+  const prev = material.onBeforeCompile;
+  const key = material.customProgramCacheKey();
+  material.customProgramCacheKey = () => key + "|nearer";
+  material.onBeforeCompile = (shader, renderer) => {
+    prev.call(material, shader, renderer);
+    shader.vertexShader = shader.vertexShader.replace(
+      "#include <project_vertex>",
+      `#include <project_vertex>
+gl_Position = projectionMatrix * vec4(mvPosition.xyz * ${(1 - bias).toFixed(6)}, 1.0);`,
+    );
+  };
+  return material;
+}
+
+// Ground polygons laid exactly on the terrain mesh (see terrainGeometry): each triangle of a
+// polygon is cut along the terrain's own triangles, so every piece is flat on one of them, with
+// that triangle's heights and its normals interpolated as the terrain's are. Edges stay sharp at
+// any zoom, unlike fills painted into a texture.
+function drapeGeometry(polys: LocalPolygon[], t: Terrain, normals: ArrayLike<number>): THREE.BufferGeometry {
+  const { nx, ny, cell, x0, y0 } = t;
+  const pos: number[] = [], nor: number[] = [];
+  const at = (i: number, j: number) => j * nx + i;
+  // A point in cell (i, j), on its lower (u >= v) or upper terrain triangle.
+  const emit = (x: number, y: number, i: number, j: number, lower: boolean) => {
+    const u = (x - x0) / cell - i, v = (y - y0) / cell - j;
+    const [a, b, c, d] = [at(i, j), at(i + 1, j), at(i, j + 1), at(i + 1, j + 1)];
+    const w: [number, number][] = lower ? [[a, 1 - u], [b, u - v], [d, v]] : [[a, 1 - v], [d, u], [c, v - u]];
+    let h = 0, n0 = 0, n1 = 0, n2 = 0;
+    for (const [k, wk] of w) {
+      h += wk * (t.heights[k] / 10 - t.ref);
+      n0 += wk * normals[k * 3];
+      n1 += wk * normals[k * 3 + 1];
+      n2 += wk * normals[k * 3 + 2];
+    }
+    pos.push(x, h, -y);
+    nor.push(n0, n1, n2);
+  };
+  // Sutherland–Hodgman: keep the part of a convex polygon where f >= 0 (f linear).
+  const clip = (poly: number[][], f: (x: number, y: number) => number) => {
+    const out: number[][] = [];
+    for (let k = 0; k < poly.length; k++) {
+      const [ax, ay] = poly[k], [bx, by] = poly[(k + 1) % poly.length];
+      const fa = f(ax, ay), fb = f(bx, by);
+      if (fa >= 0) out.push([ax, ay]);
+      if (fa >= 0 !== fb >= 0) {
+        const r = fa / (fa - fb);
+        out.push([ax + (bx - ax) * r, ay + (by - ay) * r]);
+      }
+    }
+    return out;
+  };
+  for (const [outer, ...holes] of polys) {
+    const ring = (flat: number[]) => {
+      const pts: THREE.Vector2[] = [];
+      for (let k = 0; k < flat.length; k += 2) pts.push(new THREE.Vector2(flat[k], flat[k + 1]));
+      return pts;
+    };
+    const contour = ring(outer), holeRings = holes.map(ring);
+    const all = [contour, ...holeRings].flat();
+    for (const face of THREE.ShapeUtils.triangulateShape(contour, holeRings)) {
+      let tri = face.map((k) => [all[k].x, all[k].y]);
+      // Counter-clockwise on the map faces up in the scene.
+      if ((tri[1][0] - tri[0][0]) * (tri[2][1] - tri[0][1]) - (tri[2][0] - tri[0][0]) * (tri[1][1] - tri[0][1]) < 0) tri = [tri[0], tri[2], tri[1]];
+      const ys = tri.map((q) => q[1]);
+      const j0 = Math.max(0, Math.floor((Math.min(...ys) - y0) / cell)), j1 = Math.min(ny - 2, Math.floor((Math.max(...ys) - y0) / cell));
+      // Row by row, only the cells the triangle crosses in that row: a long thin triangle's
+      // bounding box can hold thousands of cells it never touches.
+      for (let j = j0; j <= j1; j++) {
+        const V = (y: number) => (y - y0) / cell - j;
+        let row = clip(tri, (_, y) => V(y));
+        if (row.length) row = clip(row, (_, y) => 1 - V(y));
+        if (row.length < 3) continue;
+        const rx = row.map((q) => q[0]);
+        const i0 = Math.max(0, Math.floor((Math.min(...rx) - x0) / cell)), i1 = Math.min(nx - 2, Math.floor((Math.max(...rx) - x0) / cell));
+        for (let i = i0; i <= i1; i++) {
+          const U = (x: number) => (x - x0) / cell - i;
+          for (const lower of [true, false]) {
+            let piece = row;
+            const sides: ((x: number, y: number) => number)[] = lower
+              ? [(x, y) => U(x) - V(y), (x) => 1 - U(x)]
+              : [(x, y) => V(y) - U(x), (x) => U(x)];
+            for (const f of sides) if (piece.length) piece = clip(piece, f);
+            for (let k = 1; k + 1 < piece.length; k++) {
+              emit(piece[0][0], piece[0][1], i, j, lower);
+              emit(piece[k][0], piece[k][1], i, j, lower);
+              emit(piece[k + 1][0], piece[k + 1][1], i, j, lower);
+            }
+          }
+        }
+      }
+    }
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute("position", new THREE.Float32BufferAttribute(pos, 3));
+  g.setAttribute("normal", new THREE.Float32BufferAttribute(nor, 3));
+  return g;
 }
 
 // Without terrain data: a flat grid around the campus land, at height 0.
@@ -582,10 +767,10 @@ export default function CampusViewer() {
     const capMaterial = lifted(1);
     const slabMaterial = lifted(2);
     const stairsMaterial = lifted(3);
-    const roomLineMaterial = new THREE.LineBasicMaterial();
+    const roomLineMaterial = nearer(new THREE.LineBasicMaterial(), LINE_BIAS);
     // The selected room: an accent wash over its floor and an accent outline.
     const roomFillMaterial = new THREE.MeshBasicMaterial({ transparent: true, opacity: 0.28, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -4, polygonOffsetUnits: -4 });
-    const roomOutlineMaterial = new THREE.LineBasicMaterial();
+    const roomOutlineMaterial = nearer(new THREE.LineBasicMaterial(), LINE_BIAS);
     // A floor cut below the surrounding ground leaves a pit in the terrain. Its walls are the
     // selected building's inside wall faces (not floors or roofs: an upper storey's underside would
     // read as a ceiling), from the shown floor up to the ground right beside each wall, so they
@@ -595,6 +780,12 @@ export default function CampusViewer() {
     const pit = new THREE.Mesh(undefined, pitMaterial);
     pit.visible = false;
     scene.add(pit);
+    // A basement shown below ground is dug out over its whole outline (see dig), with earth walls.
+    const digMaterial = new THREE.MeshLambertMaterial({ side: THREE.DoubleSide });
+    const digWalls = new THREE.Mesh(undefined, digMaterial);
+    digWalls.visible = false;
+    digWalls.receiveShadow = true;
+    scene.add(digWalls);
     const foundations = { base: face(false), selected: face(true) };
     const styleOf = (b: Building, selected: boolean, hovered: boolean): THREE.Material[] => [
       selected ? materials.selected : hovered ? materials.hover : b.props.type === "Secondary" ? materials.Secondary : materials.Main,
@@ -603,18 +794,34 @@ export default function CampusViewer() {
     const edgeStyleOf = (selected: boolean, hovered: boolean) => (selected ? edgeMaterials.selected : hovered ? edgeMaterials.accent : edgeMaterials.base);
     // The ground: layer fills in a texture (drawn in addCampus, redrawn per theme), outlines as
     // lines, and the grid in the terrain's shader.
-    const areaMaterials = Object.fromEntries(AREAS.map((key) => [key, new THREE.MeshBasicMaterial({ depthWrite: false })]));
-    const lineMaterials = Object.fromEntries(GROUND_LINES.map((key) => [key, new THREE.LineBasicMaterial()]));
     const grid = { gridColor: { value: new THREE.Color() }, gridMinor: { value: 0 }, gridMajor: { value: 0 }, gridAngle: { value: 0 }, gridSpacing: { value: 10 }, gridMajorSpacing: { value: 100 } };
+    // Fills are drawn over the terrain in AREAS order: each a step nearer in depth than the last.
+    const maskUniforms: MaskUniforms = { maskMap: { value: null }, maskBox: { value: new THREE.Vector4() }, maskCutoff: { value: HOLE_CUTOFF } };
+    const areaMaterials = Object.fromEntries(
+      DRAPED_AREAS.map((key, i) => {
+        const m = new THREE.MeshLambertMaterial({ polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -4 * (i + 1) });
+        withGrid(m, grid, maskUniforms);
+        return [key, m];
+      }),
+    );
+    const boundaryMaterial = new THREE.MeshBasicMaterial({ depthWrite: false });
+    const lineMaterials = Object.fromEntries(GROUND_LINES.map((key) => [key, nearer(new THREE.LineBasicMaterial(), LINE_BIAS)]));
+    // The map's edge (set from the terrain in addCampus): ground, outlines and buildings fade out
+    // into the sky at it rather than stopping in a square or trailing off with the source data.
+    const clip: ClipUniforms = { clipBox: { value: new THREE.Vector4(0, 0, 1e6, 1e6) }, clipRadius: { value: 0 }, clipFade: { value: 1 }, clipColor: { value: new THREE.Color() } };
+    for (const m of [...Object.values(materials), ...Object.values(foundations), ...Object.values(edgeMaterials), ...Object.values(areaMaterials), ...Object.values(lineMaterials)]) withClip(m, clip);
     let drawGround: (() => void) | null = null;
+    // Redraws the footprint mask with extra holes (a dug-out basement), or without them.
+    let drawMask: ((extra: LocalPolygon[]) => void) | null = null;
     disposables.push(
-      ...Object.values(materials), ...Object.values(foundations), ...Object.values(edgeMaterials), ...Object.values(areaMaterials), ...Object.values(lineMaterials),
-      capMaterial, slabMaterial, stairsMaterial, roomLineMaterial, roomFillMaterial, roomOutlineMaterial, pitMaterial,
+      ...Object.values(materials), ...Object.values(foundations), ...Object.values(edgeMaterials), ...Object.values(areaMaterials), boundaryMaterial, ...Object.values(lineMaterials),
+      capMaterial, slabMaterial, stairsMaterial, digMaterial, roomLineMaterial, roomFillMaterial, roomOutlineMaterial, pitMaterial,
     );
 
     function applyTheme(p: Palette) {
       palette = p;
       (scene.background as THREE.Color).set(p.sky);
+      clip.clipColor.value.set(p.sky);
       const fog = scene.fog as THREE.Fog;
       fog.color.set(p.sky);
       fog.near = p.fog.near;
@@ -637,7 +844,9 @@ export default function CampusViewer() {
       roomFillMaterial.opacity = p.roomSelect;
       roomOutlineMaterial.color.set(p.accent);
       pitMaterial.color.set(p.pit);
+      digMaterial.color.set(p.pit);
       for (const [k, m] of Object.entries(areaMaterials)) m.color.set(p.areas[k]);
+      boundaryMaterial.color.set(p.areas.boundary);
       for (const [k, m] of Object.entries(lineMaterials)) m.color.set(p.lines[k]);
       grid.gridColor.value.set(p.grid.color);
       grid.gridMinor.value = p.grid.minor;
@@ -741,11 +950,11 @@ export default function CampusViewer() {
       ref = terrain.ref;
       terrainData = terrain;
 
-      // The ground layers and building footprints go flat into their own scene, which is drawn
-      // from straight above into a texture for the terrain (again whenever the theme changes). The
-      // layers are coplanar, so draw order (not depth) stacks them; footprints go last with alpha 0,
-      // which cuts holes in the terrain for the buildings to stand in (uphill ground would
-      // otherwise poke through floor plans).
+      // The ground layers go flat into their own scene, which is drawn from straight above into a
+      // texture for the terrain (again whenever the theme changes). The layers are coplanar, so
+      // draw order (not depth) stacks them. Building footprints go into a second texture, a mask
+      // that cuts holes in the terrain for the buildings to stand in (uphill ground would otherwise
+      // poke through floor plans). Kept apart so the holes can't bleed into the ground's colours.
       const flat = new THREE.Scene();
       flat.background = new THREE.Color();
       const flatLayer = (shapes: THREE.Shape[], material: THREE.Material, order: number) => {
@@ -754,10 +963,8 @@ export default function CampusViewer() {
         mesh.renderOrder = order;
         flat.add(mesh);
       };
-      AREAS.forEach((key, i) => {
-        const shapes = (data.layers[key]?.features ?? []).flatMap((f) => (f.polys ?? []).map(toShape));
-        flatLayer(shapes, areaMaterials[key], i);
-      });
+      // Only the campus land goes in the texture; every other fill is draped on the terrain below.
+      flatLayer((data.layers.boundary?.features ?? []).flatMap((f) => (f.polys ?? []).map(toShape)), boundaryMaterial, 0);
       const footprints: THREE.Shape[] = [];
 
       // Buildings: one mesh each so they can be picked (see buildingGeometry), edges as a child.
@@ -773,8 +980,10 @@ export default function CampusViewer() {
         scene.add(mesh);
         buildings.push(mesh);
       }
-      const holes = new THREE.MeshBasicMaterial({ opacity: 0, blending: THREE.NoBlending, depthWrite: false });
-      flatLayer(footprints, holes, AREAS.length);
+      const holes = new THREE.MeshBasicMaterial({ color: 0x000000 });
+      const mask = new THREE.Scene();
+      mask.background = new THREE.Color(0xffffff);
+      mask.add(new THREE.Mesh(toGround(new THREE.ShapeGeometry(footprints)), holes));
 
       // Draw the flat scene from above, north up, over exactly the terrain grid.
       const [x1, y1] = [terrain.x0 + (terrain.nx - 1) * terrain.cell, terrain.y0 + (terrain.ny - 1) * terrain.cell];
@@ -790,6 +999,21 @@ export default function CampusViewer() {
         colorSpace: THREE.SRGBColorSpace,
       });
       target.texture.anisotropy = renderer.capabilities.getMaxAnisotropy();
+      const maskTarget = new THREE.WebGLRenderTarget(target.width, target.height, { samples: 4, generateMipmaps: true, minFilter: THREE.LinearMipmapLinearFilter });
+      maskTarget.texture.anisotropy = target.texture.anisotropy;
+      let dug: THREE.Mesh | null = null;
+      drawMask = (extra) => {
+        if (dug) {
+          mask.remove(dug);
+          dug.geometry.dispose();
+          dug = null;
+        }
+        if (extra.length) mask.add((dug = new THREE.Mesh(toGround(new THREE.ShapeGeometry(extra.map(toShape))), holes)));
+        renderer.setRenderTarget(maskTarget);
+        renderer.render(mask, eye);
+        renderer.setRenderTarget(null);
+      };
+      drawMask([]);
       drawGround = () => {
         (flat.background as THREE.Color).set(palette.offCampus);
         renderer.setRenderTarget(target);
@@ -797,21 +1021,40 @@ export default function CampusViewer() {
         renderer.setRenderTarget(null);
       };
       drawGround();
-      disposables.push(holes, target, {
-        dispose: () => flat.traverse((o) => o instanceof THREE.Mesh && o.geometry.dispose()),
+      disposables.push(holes, target, maskTarget, {
+        dispose: () => [flat, mask].forEach((sc) => sc.traverse((o) => o instanceof THREE.Mesh && o.geometry.dispose())),
       });
 
-      const groundMaterial = new THREE.MeshLambertMaterial({ map: target.texture, alphaTest: 0.5 });
+      // A low cutoff on the mask's soft edge lets the ground run a few centimetres under each wall,
+      // so the cut never shows as a gap or a stepped edge at the wall's foot.
+      const groundMaterial = new THREE.MeshLambertMaterial({ map: target.texture, alphaMap: maskTarget.texture, alphaTest: HOLE_CUTOFF });
       withGrid(groundMaterial, grid);
+      withClip(groundMaterial, clip);
       const ground = new THREE.Mesh(terrainGeometry(terrain), groundMaterial);
       ground.receiveShadow = true;
       scene.add(ground);
       disposables.push(ground.geometry, groundMaterial);
 
+      // The ground layers' fills, laid on the terrain's own triangles, cut by the same mask.
+      maskUniforms.maskMap.value = maskTarget.texture;
+      maskUniforms.maskBox.value.set(terrain.x0, terrain.y0, x1 - terrain.x0, y1 - terrain.y0);
+      clip.clipBox.value.set((terrain.x0 + x1) / 2, (terrain.y0 + y1) / 2, (x1 - terrain.x0) / 2 - EDGE_INSET, (y1 - terrain.y0) / 2 - EDGE_INSET);
+      clip.clipRadius.value = EDGE_RADIUS;
+      clip.clipFade.value = EDGE_FADE;
+      const terrainNormals = ground.geometry.getAttribute("normal").array;
+      for (const key of DRAPED_AREAS) {
+        const polys = (data.layers[key]?.features ?? []).flatMap((f) => f.polys ?? []);
+        if (!polys.length) continue;
+        const fill = new THREE.Mesh(drapeGeometry(polys, terrain, terrainNormals), areaMaterials[key]);
+        fill.receiveShadow = true;
+        scene.add(fill);
+        disposables.push(fill.geometry);
+      }
+
       // The layers' outlines, laid on the terrain.
       for (const key of GROUND_LINES) {
         if (!groundLines[key]?.length) continue;
-        const lines = new THREE.LineSegments(ringLines(groundLines[key], (x, y) => groundY(x, y) + LINE_LIFT, LINE_STEP), lineMaterials[key]);
+        const lines = new THREE.LineSegments(drapeLines(groundLines[key], terrain), lineMaterials[key]);
         scene.add(lines);
         disposables.push(lines.geometry);
       }
@@ -1020,6 +1263,38 @@ export default function CampusViewer() {
       }
     }
 
+    // Digs the ground out over a basement's outline while it's shown: a hole in the terrain mask,
+    // and earth walls from the floor up to the ground around it. dig(null) fills it back in.
+    let digging = false;
+    function dig(polys: LocalPolygon[] | null, y = 0) {
+      if (!polys && !digging) return;
+      digging = !!polys;
+      drawMask?.(polys ?? []);
+      digWalls.geometry.dispose();
+      digWalls.visible = false;
+      if (!polys || !groundAt) return;
+      const ground = groundAt;
+      const p: number[] = [];
+      for (const r of polys.flat()) {
+        for (let k = 0; k < r.length; k += 2) {
+          const [x0, y0, x1, y1] = [r[k], r[k + 1], r[(k + 2) % r.length], r[(k + 3) % r.length]];
+          const n = Math.max(1, Math.ceil(Math.hypot(x1 - x0, y1 - y0) / LINE_STEP));
+          for (let i = 0; i < n; i++) {
+            const [ax, ay] = [x0 + ((x1 - x0) * i) / n, y0 + ((y1 - y0) * i) / n];
+            const [bx, by] = [x0 + ((x1 - x0) * (i + 1)) / n, y0 + ((y1 - y0) * (i + 1)) / n];
+            const [ta, tb] = [Math.max(y, ground(ax, ay)), Math.max(y, ground(bx, by))];
+            if (ta <= y && tb <= y) continue;
+            p.push(ax, y, -ay, bx, y, -by, bx, tb, -by, ax, y, -ay, bx, tb, -by, ax, ta, -ay);
+          }
+        }
+      }
+      const g = new THREE.BufferGeometry();
+      g.setAttribute("position", new THREE.Float32BufferAttribute(p, 3));
+      g.computeVertexNormals();
+      digWalls.geometry = g;
+      digWalls.visible = p.length > 0;
+    }
+
     function clearPlan() {
       planToken++;
       for (const m of plan.children as THREE.Mesh[]) m.geometry.dispose();
@@ -1029,6 +1304,7 @@ export default function CampusViewer() {
       setFocus(null);
       cut.constant = NO_CUT;
       pit.visible = false;
+      dig(null);
       shownLevel = null;
       shownFloor = null;
       roomHighlight = [];
@@ -1082,6 +1358,8 @@ export default function CampusViewer() {
       // Without outlines, the cap doubles as the plate.
       planMesh(top, y + CAP_LIFT, outline ? capMaterial : slabMaterial).userData.owner = mesh;
       if (outline) planMesh(outline, y + SLAB_LIFT, slabMaterial);
+      // A basement can reach past the footprint (under a plaza): dig the ground out over all of it.
+      if (outline && level.elev < 0) dig(outline, y);
 
       // Stairs and lifts filled so they're easy to find; every room as an outline.
       const stairs = floor.rooms.filter((r) => r.t === ROOM_STAIRS).flatMap((r) => r.polys);
@@ -1108,7 +1386,7 @@ export default function CampusViewer() {
       selectedRoom = shownFloor && room;
       if (shownFloor && room) {
         const { building: b, level, y } = shownFloor;
-        const outline = new THREE.LineSegments(ringLines(room.polys.flat(), () => y + ROOM_LIFT + 0.02), roomOutlineMaterial);
+        const outline = new THREE.LineSegments(ringLines(room.polys.flat(), () => y + ROOM_LIFT), roomOutlineMaterial);
         plan.add(outline);
         roomHighlight = [planMesh(room.polys, y + SLAB_LIFT, roomFillMaterial), outline];
         setRoom({
@@ -1353,6 +1631,7 @@ export default function CampusViewer() {
       return best && toPoint(best.at, best.b);
     };
     function publish() {
+      syncLink();
       if (!debugOn || queued || !campus) return;
       queued = true;
       requestAnimationFrame(() => {
@@ -1394,14 +1673,33 @@ export default function CampusViewer() {
       }
       const code = params.get("b");
       const mesh = code && buildings.find((m) => (m.userData.building as Building).props.code === code);
-      if (!mesh) return;
+      if (!mesh) return select(null);
       const level = params.get("l"), room = params.get("r");
       if (level && room) void goToRoom((mesh.userData.building as Building).id, level, room);
       else {
         select(mesh);
+        selectRoom(null);
         if (level) void showLevel(level);
       }
     }
+
+    // The address bar keeps a view link to what's on screen, like Google Earth, so it can be
+    // shared as is. Replaced (not pushed) a moment after the view settles; held back until the
+    // link the page opened with has been applied, so it isn't overwritten first.
+    let linked = false;
+    let linkTimer = 0;
+    function syncLink() {
+      if (!linked) return;
+      clearTimeout(linkTimer);
+      linkTimer = window.setTimeout(() => {
+        const b = selectedMesh?.userData.building as Building | undefined;
+        const hash = viewHash(toPoint(camera.position), toPoint(controls.target), b?.props.code, shownLevel, selectedRoom?.n);
+        if (hash !== window.location.hash) window.history.replaceState(null, "", hash);
+      }, 300);
+    }
+    // A link pasted into the address bar of an open page only changes the hash.
+    const onHashChange = () => applyLink();
+    window.addEventListener("hashchange", onHashChange);
 
     sceneApi.current = {
       deselect: () => select(null),
@@ -1456,14 +1754,24 @@ export default function CampusViewer() {
       cursor = null;
       publish();
     };
+    // Fingers on the map now; a pinch or twist that lifts one finger early is not a tap.
+    const touching = new Set<number>();
+    let multiTouch = false;
     const onDown = (e: PointerEvent) => {
+      touching.add(e.pointerId);
+      multiTouch = touching.size > 1;
       downAt = [e.clientX, e.clientY];
       flight = null;
     };
+    const onCancel = (e: PointerEvent) => {
+      touching.delete(e.pointerId);
+      downAt = null;
+    };
     const onWheel = () => { flight = null; };
     const onUp = (e: PointerEvent) => {
-      // A click, not the end of a drag.
-      if (!downAt || Math.hypot(e.clientX - downAt[0], e.clientY - downAt[1]) > 5) return;
+      touching.delete(e.pointerId);
+      // A click, not the end of a drag or a pinch.
+      if (multiTouch || !downAt || Math.hypot(e.clientX - downAt[0], e.clientY - downAt[1]) > 5) return;
       if (debugOn) pinned = probe(e);
       setFocus(null);
       const hit = pick(e);
@@ -1476,6 +1784,7 @@ export default function CampusViewer() {
     el.addEventListener("pointerleave", onLeave);
     el.addEventListener("pointerdown", onDown);
     el.addEventListener("pointerup", onUp);
+    el.addEventListener("pointercancel", onCancel);
     el.addEventListener("wheel", onWheel, { passive: true });
 
     renderer.setAnimationLoop(() => {
@@ -1507,6 +1816,7 @@ export default function CampusViewer() {
         indexSafety(data);
         addMapLabels(data);
         applyLink();
+        linked = true;
         setStatus("ready");
       })
       .catch((e: Error) => {
@@ -1523,8 +1833,11 @@ export default function CampusViewer() {
       el.removeEventListener("pointerleave", onLeave);
       el.removeEventListener("pointerdown", onDown);
       el.removeEventListener("pointerup", onUp);
+      el.removeEventListener("pointercancel", onCancel);
       el.removeEventListener("wheel", onWheel);
       controls.removeEventListener("change", publish);
+      window.removeEventListener("hashchange", onHashChange);
+      clearTimeout(linkTimer);
       renderer.setAnimationLoop(null);
       controls.dispose();
       clearPlan();
@@ -1554,85 +1867,82 @@ export default function CampusViewer() {
         {hovered?.code && <span className="ml-1.5 text-sky-300">{hovered.code}</span>}
       </div>
 
-      <div className="absolute left-4 top-4 flex w-80 max-w-[calc(100%-2rem)] flex-col gap-2">
-      <SearchBox items={searchItems} onPick={(item) => sceneApi.current?.find(item)} />
-      {room && (
-        <aside className={`${PANEL} rounded-lg p-4 text-sm`}>
-          <div className="flex items-start justify-between gap-3">
-            <h2 className="text-base font-semibold leading-snug text-zinc-950 dark:text-white">{room.title}</h2>
-            <button onClick={() => sceneApi.current?.clearRoom()} className="text-zinc-500 hover:text-zinc-900 dark:hover:text-white" aria-label="Close room">
-              ✕
-            </button>
-          </div>
-          <p className="mt-0.5 font-mono text-[11px] uppercase tracking-wider text-sky-700 dark:text-sky-300">
-            {[room.title !== room.name && room.name, room.level].filter(Boolean).join(" · ")}
-          </p>
-          <dl className="mt-2 grid grid-cols-[auto_1fr] gap-x-3 gap-y-1">
-            {room.type && (
-              <>
-                <dt className="text-zinc-500">Type</dt>
-                <dd>{room.type}</dd>
-              </>
+      <div className="absolute inset-x-3 top-[max(0.75rem,env(safe-area-inset-top))] flex flex-col gap-2 sm:inset-x-auto sm:left-4 sm:top-4 sm:w-80">
+        <SearchBox items={searchItems} onPick={(item) => sceneApi.current?.find(item)} />
+        {room && (
+          <Sheet
+            title={room.title}
+            subtitle={[room.title !== room.name && room.name, room.level].filter(Boolean).join(" · ")}
+            onClose={() => sceneApi.current?.clearRoom()}
+            closeLabel="Close room"
+          >
+            <dl className="mt-2 grid grid-cols-[auto_1fr] gap-x-3 gap-y-1">
+              {room.type && (
+                <>
+                  <dt className="text-zinc-500">Type</dt>
+                  <dd>{room.type}</dd>
+                </>
+              )}
+              <dt className="text-zinc-500">Building</dt>
+              <dd>
+                <button onClick={() => sceneApi.current?.clearRoom()} className="text-left hover:underline">
+                  {room.building}
+                </button>
+              </dd>
+              {room.wash?.gender && (
+                <>
+                  <dt className="text-zinc-500">For</dt>
+                  <dd>{room.wash.gender}</dd>
+                </>
+              )}
+              {room.wash?.access && !/^n\/a$/i.test(room.wash.access) && (
+                <>
+                  <dt className="text-zinc-500">Access</dt>
+                  <dd>{room.wash.access}</dd>
+                </>
+              )}
+            </dl>
+            {room.note && <p className="mt-2 leading-relaxed">{room.note}</p>}
+            {room.link && (
+              <a href={room.link} target="_blank" rel="noopener noreferrer" className="mt-2 inline-block font-medium text-sky-700 hover:underline dark:text-sky-300">
+                Room page ↗
+              </a>
             )}
-            <dt className="text-zinc-500">Building</dt>
-            <dd>
-              <button onClick={() => sceneApi.current?.clearRoom()} className="text-left hover:underline">
-                {room.building}
-              </button>
-            </dd>
-            {room.wash?.gender && (
-              <>
-                <dt className="text-zinc-500">For</dt>
-                <dd>{room.wash.gender}</dd>
-              </>
+            <EmergencySection items={emergency} onGo={(n) => sceneApi.current?.goToNearest(n)} />
+          </Sheet>
+        )}
+        {selected && !room && (
+          <Sheet
+            title={selected.fullName ?? selected.name}
+            subtitle={[selected.code, selected.number && `Building ${selected.number}`].filter(Boolean).join(" · ")}
+            onClose={() => sceneApi.current?.deselect()}
+            closeLabel="Close"
+          >
+            {selected.about && <p className="mt-2 leading-relaxed">{selected.about}</p>}
+            {selected.link && (
+              <a href={selected.link} target="_blank" rel="noopener noreferrer" className="mt-2 inline-block font-medium text-sky-700 hover:underline dark:text-sky-300">
+                Building page ↗
+              </a>
             )}
-            {room.wash?.access && !/^n\/a$/i.test(room.wash.access) && (
-              <>
-                <dt className="text-zinc-500">Access</dt>
-                <dd>{room.wash.access}</dd>
-              </>
-            )}
-          </dl>
-          {room.note && <p className="mt-2 leading-relaxed">{room.note}</p>}
-          {room.link && (
-            <a href={room.link} target="_blank" rel="noopener noreferrer" className="mt-2 inline-block font-medium text-sky-700 hover:underline dark:text-sky-300">
-              Room page ↗
-            </a>
-          )}
-          <EmergencySection items={emergency} onGo={(n) => sceneApi.current?.goToNearest(n)} />
-        </aside>
-      )}
-      {selected && !room && (
-        <aside className={`${PANEL} rounded-lg p-4 text-sm`}>
-          <div className="flex items-start justify-between gap-3">
-            <h2 className="text-base font-semibold leading-snug text-zinc-950 dark:text-white">{selected.fullName ?? selected.name}</h2>
-            <button onClick={() => sceneApi.current?.deselect()} className="text-zinc-500 hover:text-zinc-900 dark:hover:text-white" aria-label="Close">
-              ✕
-            </button>
-          </div>
-          <p className="mt-0.5 font-mono text-[11px] uppercase tracking-wider text-sky-700 dark:text-sky-300">
-            {[selected.code, selected.number && `Building ${selected.number}`].filter(Boolean).join(" · ")}
-          </p>
-          {selected.about && <p className="mt-2 leading-relaxed">{selected.about}</p>}
-          {selected.link && (
-            <a href={selected.link} target="_blank" rel="noopener noreferrer" className="mt-2 inline-block font-medium text-sky-700 hover:underline dark:text-sky-300">
-              Building page ↗
-            </a>
-          )}
-          <EmergencySection items={emergency} onGo={(n) => sceneApi.current?.goToNearest(n)} />
-        </aside>
-      )}
+            <EmergencySection items={emergency} onGo={(n) => sceneApi.current?.goToNearest(n)} />
+          </Sheet>
+        )}
       </div>
 
+      {/* Phones: a column on the right, top floor on top, like Google Maps' indoor levels. */}
       {floors && (
-        <div role="group" aria-label="Floor" className={`${PANEL} absolute bottom-4 left-4 flex gap-1 rounded-full p-1`}>
+        <div
+          role="group"
+          aria-label="Floor"
+          className={`${PANEL} absolute right-3 top-1/2 flex max-h-[40dvh] -translate-y-1/2 flex-col-reverse gap-1 overflow-y-auto rounded-full p-1 sm:right-auto sm:top-auto sm:bottom-4 sm:left-4 sm:max-h-none sm:translate-y-0 sm:flex-row`}
+        >
           {floors.levels.map((l) => (
             <button
               key={l.id}
               title={l.label}
               aria-pressed={l.id === floors.level}
               onClick={() => sceneApi.current?.showLevel(l.id)}
-              className={`h-8 min-w-8 rounded-full px-2 font-mono text-sm tabular-nums transition-colors ${
+              className={`h-10 min-w-10 shrink-0 rounded-full px-2 font-mono text-sm tabular-nums transition-colors sm:h-8 sm:min-w-8 ${
                 l.id === floors.level
                   ? "bg-zinc-900 text-white dark:bg-white dark:text-zinc-950"
                   : "text-zinc-600 hover:bg-zinc-200 dark:text-zinc-400 dark:hover:bg-white/10 dark:hover:text-white"
@@ -1644,12 +1954,13 @@ export default function CampusViewer() {
         </div>
       )}
 
-      <div className="absolute right-4 top-4 flex gap-2">
+      {/* Phones: round buttons stacked on the right under the search pill. */}
+      <div className="absolute right-3 top-[calc(max(0.75rem,env(safe-area-inset-top))+3.5rem)] flex flex-col items-end gap-2 sm:right-4 sm:top-4 sm:flex-row">
         <button
           onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
           title={theme === "dark" ? "Light mode" : "Dark mode"}
           aria-label={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
-          className={`${PANEL} grid h-7 w-7 place-items-center rounded-full text-xs hover:text-zinc-950 dark:hover:text-white`}
+          className={`${PANEL} grid h-10 w-10 place-items-center rounded-full text-sm hover:text-zinc-950 sm:h-7 sm:w-7 sm:text-xs dark:hover:text-white`}
         >
           {theme === "dark" ? "☀" : "☾"}
         </button>

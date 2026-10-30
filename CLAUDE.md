@@ -55,16 +55,27 @@ enrich list). The 3D-specific steps are custom enrichers:
 - Look: high-tech and monochrome, dark by default with a light mode (`THEMES` in `app/campus/theme.ts`;
   panels use a class-based `dark:` variant from `app/globals.css`). White buildings with edge
   lines, one accent (cyan) for hover and selection, rooms as outlines (stairs and lifts filled).
-- The ground is three layers: dark fills drawn into a texture draped on the terrain (redrawn on a
-  theme change), the layers' outlines as lines laid on the terrain (`extras/groundLines.json`:
-  unioned per group by `groundLines()`, so no seams), and a faint 10 m / 100 m grid in the
-  terrain's shader (spacing and angle in the theme). The texture's alpha is 0 under building footprints, cutting holes so uphill
-  ground can't poke through floor plans.
+- The ground: the terrain mesh carries a texture with only the campus land (redrawn on a theme
+  change); every other fill (roads, paths, forest, ...) is real geometry cut along the terrain's own
+  triangles (`drapeGeometry`), so edges stay sharp at any zoom. The user rejected the texture-painted
+  fills' jagged edges. On top: the layers' outlines as lines (`extras/groundLines.json`, unioned per
+  group by `groundLines()`, so no seams) and a grid in the shader (spacing and angle in the theme).
+  A separate footprint mask texture cuts holes under buildings in the terrain and the fills alike,
+  so uphill ground can't poke through floor plans. Outlines lie exactly on the terrain too
+  (`drapeLines`, cut at the terrain's triangle edges) and win over the fills by a depth bias
+  (`nearer`), not by floating: the user found lifted lines off-putting.
+- The map has an edge (`withClip`): a rounded rectangle just inside the terrain that ground, lines
+  and buildings fade into the sky towards and are cut off beyond (`EDGE_INSET/RADIUS/FADE`).
+- Shader tweaks chain through `onBeforeCompile` and each sets `customProgramCacheKey`, so variants
+  don't share a compiled program.
 - Each building is one mesh with two material groups: body (0) and foundation (1). It stands at
   `ground` + `PLINTH` (0.4 m); the foundation runs down below the lowest ground or level.
 - Selecting a building shows its ground floor; a clipping plane cuts it at the shown floor
   (+ `CUT_SLACK`), with a cap, floor plate and rooms on top. When the cut is below the ground
   beside it, the pit walls are the building's inside wall faces (vertical only, `wallsOf`).
+- A basement (a level below 1) reaching past the footprint (CLE's D wing under the plaza) is dug
+  out while shown: its outline is added to the terrain's footprint mask (a separate alpha texture,
+  so holes never bleed into the ground colours) and earth walls run from it up to the ground (`dig`).
 
 ## Decisions the user made (keep them)
 

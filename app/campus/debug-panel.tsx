@@ -63,14 +63,18 @@ const latLon = (p: DebugPoint) => `${dms(p.lat, "N", "S")} ${dms(p.lon, "E", "W"
 const decimal = (p: DebugPoint) => `${p.lat.toFixed(6)}, ${p.lon.toFixed(6)}`;
 const local = (p: DebugPoint) => `(${p.x.toFixed(1)}, ${p.y.toFixed(1)})`;
 
-/** A link that reopens this exact view: camera, target, selected building and floor. */
-export function viewLink(s: DebugSnapshot): string {
-  const { position: p, target: t } = s.camera;
+/** The hash of a view link: camera, target, selected building, floor and room. */
+export function viewHash(p: DebugPoint, t: DebugPoint, code?: string | null, level?: string | null, room?: string | null): string {
   const params = new URLSearchParams({ view: [p.x, p.y, p.elev, t.x, t.y, t.elev].map((v) => v.toFixed(1)).join(",") });
-  if (s.building?.code) params.set("b", s.building.code);
-  if (s.level) params.set("l", s.level);
-  if (s.level && s.room) params.set("r", s.room);
-  return `${window.location.origin}${window.location.pathname}#${params.toString().replaceAll("%2C", ",")}`;
+  if (code) params.set("b", code);
+  if (level) params.set("l", level);
+  if (level && room) params.set("r", room);
+  return `#${params.toString().replaceAll("%2C", ",")}`;
+}
+
+/** A link that reopens this exact view. */
+export function viewLink(s: DebugSnapshot): string {
+  return `${window.location.origin}${window.location.pathname}${viewHash(s.camera.position, s.camera.target, s.building?.code, s.level, s.room)}`;
 }
 
 function report(s: DebugSnapshot, note: string): string {
@@ -208,7 +212,7 @@ export default function DebugPanel({
 
   const c = snapshot?.camera;
   return (
-    <aside className={`${PANEL} absolute right-4 top-14 max-h-[calc(100%-4.5rem)] w-80 max-w-[calc(100%-2rem)] overflow-y-auto rounded-lg p-3 font-mono text-xs`}>
+    <aside className={`${PANEL} absolute inset-x-3 top-[10.5rem] z-30 max-h-[calc(100%-11.5rem)] sm:inset-x-auto sm:right-4 sm:top-14 sm:max-h-[calc(100%-4.5rem)] sm:w-80 overflow-y-auto rounded-lg p-3 font-mono text-xs`}>
       <div className="flex items-center justify-between font-sans">
         <h2 className="font-mono text-[11px] font-semibold uppercase tracking-wider text-zinc-950 dark:text-white">Debug</h2>
         <button onClick={onClose} className="text-zinc-500 hover:text-zinc-900 dark:hover:text-white" aria-label="Close debug panel" title="Close (`)">

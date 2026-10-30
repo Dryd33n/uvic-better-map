@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { PANEL } from "./ui";
 
 /** Something to find: a building, a room in one, or a spot in one (a food outlet with no room). */
@@ -54,22 +54,27 @@ export default function SearchBox({ items, onPick }: { items: SearchItem[]; onPi
   const [open, setOpen] = useState(false);
   const [active, setActive] = useState(0);
   const results = useMemo(() => search(items, query), [items, query]);
+  const input = useRef<HTMLInputElement>(null);
 
   const pick = (item: SearchItem) => {
     onPick(item);
     setQuery(item.title);
     setOpen(false);
+    // Puts a phone keyboard away.
+    input.current?.blur();
   };
 
   return (
     <div className="relative">
-      <div className={`${PANEL} flex items-center gap-2 rounded-lg px-3`}>
+      <div className={`${PANEL} flex items-center gap-2 rounded-full px-4 sm:rounded-lg sm:px-3`}>
         <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" className="shrink-0 text-zinc-500" aria-hidden>
           <circle cx="11" cy="11" r="7" />
           <path d="M20 20l-4-4" />
         </svg>
         <input
+          ref={input}
           type="search"
+          enterKeyHint="search"
           value={query}
           placeholder="Search rooms and buildings"
           aria-label="Search rooms and buildings"
@@ -91,16 +96,16 @@ export default function SearchBox({ items, onPick }: { items: SearchItem[]; onPi
             else return;
             e.preventDefault();
           }}
-          className="h-10 w-full bg-transparent text-sm text-zinc-900 outline-none placeholder:text-zinc-500 dark:text-zinc-100 [&::-webkit-search-cancel-button]:hidden"
+          className="h-12 w-full bg-transparent text-base sm:h-10 sm:text-sm text-zinc-900 outline-none placeholder:text-zinc-500 dark:text-zinc-100 [&::-webkit-search-cancel-button]:hidden"
         />
         {query && (
-          <button onMouseDown={(e) => e.preventDefault()} onClick={() => setQuery("")} aria-label="Clear search" className="text-zinc-500 hover:text-zinc-900 dark:hover:text-white">
+          <button onMouseDown={(e) => e.preventDefault()} onClick={() => setQuery("")} aria-label="Clear search" className="-m-2 p-2 text-zinc-500 hover:text-zinc-900 dark:hover:text-white">
             ✕
           </button>
         )}
       </div>
       {open && results.length > 0 && (
-        <ul id="search-results" role="listbox" className={`${PANEL} absolute inset-x-0 top-12 z-10 overflow-hidden rounded-lg py-1`}>
+        <ul id="search-results" role="listbox" className={`${PANEL} absolute inset-x-0 top-14 z-30 overflow-hidden rounded-2xl py-1 sm:top-12 sm:rounded-lg`}>
           {results.map((item, i) => (
             <li
               key={`${item.building}:${item.room?.level}:${item.room?.name ?? ""}`}
@@ -112,7 +117,7 @@ export default function SearchBox({ items, onPick }: { items: SearchItem[]; onPi
                 pick(item);
               }}
               onMouseEnter={() => setActive(i)}
-              className={`flex cursor-pointer items-center gap-3 px-3 py-1.5 ${i === active ? "bg-black/5 dark:bg-white/10" : ""}`}
+              className={`flex cursor-pointer items-center gap-3 px-4 py-2.5 sm:px-3 sm:py-1.5 ${i === active ? "bg-black/5 dark:bg-white/10" : ""}`}
             >
               <span className="grid h-6 w-6 shrink-0 place-items-center rounded bg-zinc-200 font-mono text-[10px] text-zinc-600 dark:bg-white/10 dark:text-zinc-300">
                 {item.kind === "building" ? "B" : item.kind === "room" ? "R" : "P"}
