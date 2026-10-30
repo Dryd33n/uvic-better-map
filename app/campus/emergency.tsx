@@ -10,8 +10,12 @@ export interface Nearest {
   level?: string;
   /** The source's note on where it is ("Near west door"). */
   where?: string;
-  /** Straight-line metres on the map, and floors up (+) or down (-) from here. */
-  distance: number;
+  /**
+   * Walking metres (corridors indoors, paths outdoors; stairs not counted), and floors up (+) or
+   * down (-) from here. No distance for equipment in a selected building with no room selected:
+   * where in it we are isn't known, so there's no walk.
+   */
+  distance?: number;
   floors: number;
   /** Where to go to see it. */
   target: { building?: string; level?: string; at: [number, number] };
@@ -39,9 +43,11 @@ export default function EmergencySection({ items, onGo }: { items: Nearest[]; on
               <span className="min-w-0 flex-1">
                 <span className="flex items-baseline justify-between gap-2">
                   <span className="font-medium text-zinc-900 dark:text-zinc-100">{SAFETY_LABELS[item.kind]}</span>
-                  <span className="shrink-0 font-mono text-[10px] text-zinc-500">
-                    {Math.round(item.distance)} m · {floorsText(item.floors)}
-                  </span>
+                  {item.distance !== undefined && (
+                    <span className="shrink-0 font-mono text-[10px] text-zinc-500">
+                      {Math.round(item.distance)} m · {floorsText(item.floors)}
+                    </span>
+                  )}
                 </span>
                 <span className="block truncate text-xs text-zinc-500">{[item.building ?? "Outdoors", item.level].filter(Boolean).join(" · ")}</span>
                 {item.where && <span className="block text-xs text-zinc-500">{item.where[0].toUpperCase() + item.where.slice(1)}</span>}
