@@ -39,6 +39,8 @@ enrich list). The 3D-specific steps are custom enrichers:
   has rooms, merged into bands. Replaced the older `overhangs()` (still exported, not used).
 - `floorOutlines()` → `extras/floorOutlines.json`: each level's outline, for the floor plate.
 - `groundLines()` → `extras/groundLines.json`: ground layer outlines, unioned per group.
+- `walkGraph()` → `extras/walkGraph.json`: a line layer as a routable graph (`split` for drawn lines;
+  OSM is joined only at shared nodes, so not under bridges).
 - `foodOutlets()` names each food outlet's room (label + link) and tags the outlet with `room`/`level`;
   `rooms: { Starbucks: 'CSR 050' }` sets one by hand. Art's Place and University Club have no
   room: they show as a pinned spot on their building's ground floor.
@@ -126,13 +128,17 @@ Run `npx tsc --noEmit -p .` and `npx eslint app/campus` after changes.
 - Stairs and lifts (room type 4, `S3`/`L57` repeat across levels) get icons but aren't linked
   between levels yet.
 - Info panels have an emergency section (`app/campus/emergency.tsx`): nearest AED, naloxone kit and
-  emergency phone
-  (map distance + 25 m per floor), each a link to it. No exits yet: UVic publishes no building
-  entrance data (checked every web map layer and their ArcGIS org, Oct 2026); the user chose to
-  skip exits rather than infer them.
+  emergency phone by walking distance (+ 25 m per floor), each a link to it that draws the walk
+  as red dots (`showRoute`). Routing (`app/campus/walk.ts`) runs on OpenStreetMap's walkable ways
+  (`walkNetwork` layer, `walkGraph()` → `extras/walkGraph.json`; the user chose OSM over UVic's
+  ArcGIS walkway network as more complete) and leaves/enters buildings through OSM's mapped
+  entrances (`entrances` layer, 68, on 21 buildings); elsewhere it walks straight to the nearest
+  path. Indoors it's a straight line. Planned next if it works well: cross-campus navigation.
+  UVic publishes no entrance data; exits aren't shown as markers (the user had chosen to skip them
+  rather than infer them; OSM's entrances are mapped, not inferred).
 - Parking lot names (`lots` layer) are labels on the ground; floor plan markers win where they collide.
-- The lidar (Open Government Licence – Canada) needs an attribution line in the app before it's
-  public; it's only in the data README so far.
+- The lidar (Open Government Licence – Canada) and OpenStreetMap (ODbL: "© OpenStreetMap
+  contributors") need an attribution line in the app before it's public; neither is shown yet.
 - NRCan also publishes a 1 m surface model (DSM) in the same bucket: real building heights could
   come from it instead of the 4 m-per-storey estimate.
 - Gaps in floor data now show as lower roof (unmapped space reads as missing storey).

@@ -54,6 +54,12 @@ export type FloorOutlines = Record<string, Record<string, LocalPolygon[]>>;
 /** extras/groundLines.json: each group of ground layers' outlines (unioned, footprints cut away), as rings. */
 export type GroundLines = Record<string, FlatRing[]>;
 
+/** extras/walkGraph.json: the walking network, noded. Flat [x0, y0, x1, y1, ...] local metres and node index pairs. */
+export interface WalkGraph {
+  nodes: number[];
+  edges: number[];
+}
+
 /**
  * extras/terrain.json: a lidar ground heightfield. heights[j * nx + i] is the ground at local
  * (x0 + i·cell, y0 + j·cell) in decimetres above sea level; j = 0 is the south edge.

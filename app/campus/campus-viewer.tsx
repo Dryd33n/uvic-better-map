@@ -4,6 +4,9 @@ import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "reac
 import * as THREE from "three";
 import { MapControls } from "three/addons/controls/MapControls.js";
 import { mergeGeometries } from "three/addons/utils/BufferGeometryUtils.js";
+import { Line2 } from "three/addons/lines/Line2.js";
+import { LineGeometry } from "three/addons/lines/LineGeometry.js";
+import { LineMaterial } from "three/addons/lines/LineMaterial.js";
 import DebugPanel, { type DebugPoint, type DebugSnapshot, viewHash } from "./debug-panel";
 import { ICONS, type IconName } from "./icons";
 import EmergencySection, { SAFETY_LABELS, type Nearest } from "./emergency";
@@ -11,7 +14,8 @@ import SearchBox, { type SearchItem } from "./search";
 import Sheet from "./sheet";
 import { THEMES, withEdits, type Palette, type ThemeEdits, type ThemeName } from "./theme";
 import { PANEL } from "./ui";
-import type { BuildingProps, CampusBundle, FloorFile, FloorOutlines, GroundLines, Level, LocalFeature, LocalPolygon, LocalRoom, Massing, Terrain } from "./types";
+import { Walker } from "./walk";
+import type { BuildingProps, CampusBundle, FloorFile, FloorOutlines, GroundLines, Level, LocalFeature, LocalPolygon, LocalRoom, Massing, Terrain, WalkGraph } from "./types";
 
 const DATA_URL = "/campus/campus.local.json";
 const MASSING_URL = "/campus/extras/massing.json";
@@ -20,6 +24,7 @@ const TERRAIN_URL = "/campus/extras/terrain.json";
 const floorUrl = (key: string) => `/campus/floors/${key}.local.json`;
 
 const GROUND_LINES_URL = "/campus/extras/groundLines.json";
+const WALK_GRAPH_URL = "/campus/extras/walkGraph.json";
 
 // Ground layers, bottom to top, in the theme's colours.
 const AREAS = ["boundary", "forest", "fields", "trails", "roads", "parking", "reserved", "shortParking", "walkways", "paths", "fountains", "construction"];
@@ -92,6 +97,14 @@ const FOCUS_PIN = `<span class="relative grid h-[44px] w-[44px] shrink-0 place-i
 // Nearest safety equipment, by layer (= kind): each floor up or down counts as this many metres.
 const SAFETY_KINDS = ["aed", "naloxone", "phones"] as const;
 const FLOOR_COST = 25;
+// The walk to what the panel sent you to: red dots this many px across, as far apart, lying on the
+// ground (or the floor indoors) and drawn this fraction of their distance nearer, like the outlines.
+const ROUTE_COLOR = 0xef4444;
+const ROUTE_DOT = 5;
+const ROUTE_GAP = 4;
+const ROUTE_BIAS = 0.004;
+// An entrance belongs to a building whose outline it's within this many metres of.
+const DOOR_REACH = 3;
 // Point layers shown on floor plans, with their icon and rank (lower places first).
 const POINT_MARKERS: [layer: string, icon: IconName, rank: number][] = [
   ["aed", "aed", 0],
@@ -220,6 +233,18 @@ function ringPoints(flat: number[]): THREE.Vector2[] {
   const pts: THREE.Vector2[] = [];
   for (let i = 0; i < flat.length; i += 2) pts.push(new THREE.Vector2(flat[i], flat[i + 1]));
   return pts;
+}
+
+// Metres from local point (x, y) to a flat ring's nearest edge.
+function ringDistance(flat: number[], [x, y]: [number, number]): number {
+  let best = Infinity;
+  for (let i = 0, j = flat.length - 2; i < flat.length; j = i, i += 2) {
+    const [ax, ay, bx, by] = [flat[j], flat[j + 1], flat[i], flat[i + 1]];
+    const dx = bx - ax, dy = by - ay;
+    const t = Math.max(0, Math.min(1, ((x - ax) * dx + (y - ay) * dy) / (dx * dx + dy * dy || 1)));
+    best = Math.min(best, Math.hypot(x - ax - t * dx, y - ay - t * dy));
+  }
+  return best;
 }
 
 // Whether local point (x, y) lies inside a flat ring.
@@ -434,6 +459,18 @@ diffuseColor.rgb = mix(diffuseColor.rgb, gridColor, max(gridLine(gp, gridSpacing
   };
 }
 
+// Where a line from a to b crosses a terrain triangle's edge, as fractions 0..1 along it (both ends
+// included, sorted): where u, v or u - v passes a whole number of cells.
+function cellCuts(ax: number, ay: number, bx: number, by: number, t: Terrain): number[] {
+  const [u0, v0, u1, v1] = [(ax - t.x0) / t.cell, (ay - t.y0) / t.cell, (bx - t.x0) / t.cell, (by - t.y0) / t.cell];
+  const cuts = [0, 1];
+  for (const [a, b] of [[u0, u1], [v0, v1], [u0 - v0, u1 - v1]]) {
+    if (a === b) continue;
+    for (let n = Math.ceil(Math.min(a, b)); n <= Math.floor(Math.max(a, b)); n++) cuts.push((n - a) / (b - a));
+  }
+  return cuts.sort((x, y) => x - y);
+}
+
 // Closed rings laid exactly on the terrain mesh as line segments: each edge is cut where it crosses
 // a terrain triangle's edge (the grid lines and the cells' diagonals), so every piece lies on one
 // triangle and needs no lift above it.
@@ -443,14 +480,7 @@ function drapeLines(rings: number[][], t: Terrain): THREE.BufferGeometry {
   for (const r of rings) {
     for (let k = 0; k < r.length; k += 2) {
       const [ax, ay, bx, by] = [r[k], r[k + 1], r[(k + 2) % r.length], r[(k + 3) % r.length]];
-      const [u0, v0, u1, v1] = [(ax - t.x0) / t.cell, (ay - t.y0) / t.cell, (bx - t.x0) / t.cell, (by - t.y0) / t.cell];
-      const cuts = [0, 1];
-      // Where u, v or u - v passes a whole number along the edge.
-      for (const [a, b] of [[u0, u1], [v0, v1], [u0 - v0, u1 - v1]]) {
-        if (a === b) continue;
-        for (let n = Math.ceil(Math.min(a, b)); n <= Math.floor(Math.max(a, b)); n++) cuts.push((n - a) / (b - a));
-      }
-      cuts.sort((x, y) => x - y);
+      const cuts = cellCuts(ax, ay, bx, by, t);
       for (let i = 0; i + 1 < cuts.length; i++) {
         if (cuts[i + 1] - cuts[i] < 1e-6) continue;
         const [px, py] = [ax + (bx - ax) * cuts[i], ay + (by - ay) * cuts[i]];
@@ -477,6 +507,28 @@ function nearer<M extends THREE.Material>(material: M, bias: number): M {
       "#include <project_vertex>",
       `#include <project_vertex>
 gl_Position = projectionMatrix * vec4(mvPosition.xyz * ${(1 - bias).toFixed(6)}, 1.0);`,
+    );
+  };
+  return material;
+}
+
+// A fat dashed line whose dashes are round dots (the dash as long as the line is wide, set per
+// frame in world units), drawn `bias` of its distance nearer the camera as nearer() does.
+function dottedMaterial(color: number, bias: number): LineMaterial {
+  const material = new LineMaterial({ color, linewidth: ROUTE_DOT, dashed: true });
+  material.customProgramCacheKey = () => "dotted";
+  material.onBeforeCompile = (shader) => {
+    shader.vertexShader = shader.vertexShader.replace(
+      "vec4 end = modelViewMatrix * vec4( instanceEnd, 1.0 );",
+      `vec4 end = modelViewMatrix * vec4( instanceEnd, 1.0 );
+start.xyz *= ${(1 - bias).toFixed(6)};
+end.xyz *= ${(1 - bias).toFixed(6)};`,
+    );
+    // vUv.x runs -1..1 across the line: keep a disc in each dash.
+    shader.fragmentShader = shader.fragmentShader.replace(
+      "if ( mod( vLineDistance + dashOffset, dashSize + gapSize ) > dashSize ) discard; // todo - FIX",
+      `float along = mod( vLineDistance + dashOffset, dashSize + gapSize ) / dashSize * 2.0 - 1.0;
+if ( along * along + vUv.x * vUv.x > 1.0 ) discard;`,
     );
   };
   return material;
@@ -742,11 +794,14 @@ export default function CampusViewer() {
     sun.shadow.bias = -0.0004;
     scene.add(sun, sun.target);
 
+    // Fat lines (the route) are sized in pixels, so they need the canvas size.
+    const routeMaterial = dottedMaterial(ROUTE_COLOR, ROUTE_BIAS);
     const resize = () => {
       const { clientWidth: w, clientHeight: h } = mount;
       renderer.setSize(w, h);
       camera.aspect = w / h;
       camera.updateProjectionMatrix();
+      routeMaterial.resolution.set(w, h);
     };
     const observer = new ResizeObserver(resize);
     observer.observe(mount);
@@ -786,6 +841,12 @@ export default function CampusViewer() {
     digWalls.visible = false;
     digWalls.receiveShadow = true;
     scene.add(digWalls);
+    // The walk to what the panel sent you to (showRoute).
+    const route = new Line2(new LineGeometry(), routeMaterial);
+    route.visible = false;
+    route.frustumCulled = false;
+    route.renderOrder = 1;
+    scene.add(route);
     const foundations = { base: face(false), selected: face(true) };
     const styleOf = (b: Building, selected: boolean, hovered: boolean): THREE.Material[] => [
       selected ? materials.selected : hovered ? materials.hover : b.props.type === "Secondary" ? materials.Secondary : materials.Main,
@@ -816,6 +877,7 @@ export default function CampusViewer() {
     disposables.push(
       ...Object.values(materials), ...Object.values(foundations), ...Object.values(edgeMaterials), ...Object.values(areaMaterials), boundaryMaterial, ...Object.values(lineMaterials),
       capMaterial, slabMaterial, stairsMaterial, digMaterial, roomLineMaterial, roomFillMaterial, roomOutlineMaterial, pitMaterial,
+      routeMaterial,
     );
 
     function applyTheme(p: Palette) {
@@ -1181,11 +1243,13 @@ export default function CampusViewer() {
       placeMarkers();
     }
     // The spot something was found at (an AED the panel sent you to): a pulsing pin with its name,
-    // always shown, which other markers make way for. Cleared by the next click on the map.
+    // always shown, which other markers make way for. Cleared by the next click on the map, with
+    // the route to it.
     let focus: { el: HTMLDivElement; at: THREE.Vector3 } | null = null;
     function setFocus(at: THREE.Vector3 | null, label = "", detail = "") {
       focus?.el.remove();
       focus = null;
+      route.visible = false;
       if (!at) return;
       const el = document.createElement("div");
       el.className = "absolute left-0 top-0 flex w-0 flex-col items-center";
@@ -1453,23 +1517,45 @@ export default function CampusViewer() {
     // Scene height of a piece of equipment's floor: its building's level, else the ground there.
     const safetyY = (e: Safety) => (e.mesh ? e.mesh.position.y + (e.level?.elev ?? 0) : groundAt!(...e.at));
 
-    // The nearest of each kind to the selected room, else to the selected building's ground floor.
+    // The nearest of each kind to the selected room, else to the selected building's ground floor,
+    // by walking distance: straight within a building, else along the walking network.
+    let walker: Walker | null = null;
+    type Walk = { path: [number, number][]; from: THREE.Mesh | null; fromY: number };
+    const walks = new WeakMap<Nearest, Walk>();
+    // Each building's mapped entrances (OSM): those on or within DOOR_REACH of its outline.
+    const doors = new Map<THREE.Mesh, [number, number][]>();
+    function indexDoors(data: CampusBundle) {
+      for (const f of data.layers.entrances?.features ?? []) {
+        for (const m of buildings) {
+          const rings = ((m.userData.building as Building).polys ?? []).map((q) => q[0]);
+          if (!rings.some((r) => inRing(r, f.at) || ringDistance(r, f.at) <= DOOR_REACH)) continue;
+          doors.set(m, [...(doors.get(m) ?? []), f.at]);
+        }
+      }
+    }
     function updateEmergency() {
       const b = selectedMesh?.userData.building as Building | undefined;
       const from = selectedRoom && shownFloor ? { at: selectedRoom.at, y: shownFloor.y } : b && selectedMesh ? { at: b.at, y: selectedMesh.position.y } : null;
       if (!from) return setEmergency([]);
       const storey = campus?.storey ?? 4;
+      const outside = safety.filter((e) => !selectedMesh || e.mesh !== selectedMesh);
+      const fromDoors = selectedMesh ? doors.get(selectedMesh) : undefined;
+      const toDoors = outside.map((e) => (e.mesh ? doors.get(e.mesh) : undefined));
+      const routes = new Map(walker?.routes(from.at, outside.map((e) => e.at), fromDoors, toDoors).map((r, i) => [outside[i], r]));
       const items: Nearest[] = [];
       for (const kind of SAFETY_KINDS) {
-        let best: Nearest | null = null, bestCost = Infinity;
+        let best: Nearest | null = null, bestCost = Infinity, bestPath: [number, number][] = [];
         for (const e of safety) {
           if (e.kind !== kind) continue;
-          const distance = Math.hypot(e.at[0] - from.at[0], e.at[1] - from.at[1]);
+          const walk = routes.get(e);
+          const path = walk?.path ?? [from.at, e.at];
+          const distance = walk?.distance ?? Math.hypot(e.at[0] - from.at[0], e.at[1] - from.at[1]);
           const floors = Math.round((safetyY(e) - from.y) / storey);
           const cost = distance + FLOOR_COST * Math.abs(floors);
           if (cost >= bestCost) continue;
           const home = e.mesh?.userData.building as Building | undefined;
           bestCost = cost;
+          bestPath = path;
           best = {
             kind, distance, floors,
             building: home && (home === b ? "This building" : (home.props.fullName ?? home.props.name)),
@@ -1479,23 +1565,65 @@ export default function CampusViewer() {
             target: { building: home?.id, level: e.level?.id, at: e.at },
           };
         }
-        if (best) items.push(best);
+        if (best) {
+          walks.set(best, { path: bestPath, from: selectedMesh, fromY: from.y });
+          items.push(best);
+        }
       }
       setEmergency(items);
     }
 
-    // Shows a piece of equipment: its building and floor, flown to; or the spot outdoors.
+    // Draws a walk as red dots: on the ground outdoors, on the floor inside the building it starts
+    // in (`fromY`) or ends in (`toY`), cut at the terrain's triangles like the outlines.
+    function showRoute(walk: Walk | null, to: THREE.Mesh | null = null, toY = 0) {
+      route.visible = false;
+      if (!walk || !groundAt || !terrainData) return;
+      const polysOf = (m: THREE.Mesh | null) => ((m?.userData.building as Building | undefined)?.polys ?? []).map((q) => q[0]);
+      const [fromPolys, toPolys] = [polysOf(walk.from), polysOf(to)];
+      // The same building at both ends: the walk is on the shown floor.
+      const fromY = walk.from && walk.from === to ? toY : walk.fromY;
+      const yAt = (p: [number, number]) =>
+        toPolys.some((r) => inRing(r, p)) ? toY + ROOM_LIFT : fromPolys.some((r) => inRing(r, p)) ? fromY + ROOM_LIFT : groundAt!(...p);
+      const pos: number[] = [];
+      walk.path.forEach(([bx, by], k) => {
+        if (k === 0) return void pos.push(bx, yAt([bx, by]), -by);
+        const [ax, ay] = walk.path[k - 1];
+        for (const c of cellCuts(ax, ay, bx, by, terrainData!).slice(1)) {
+          const p: [number, number] = [ax + (bx - ax) * c, ay + (by - ay) * c];
+          pos.push(p[0], yAt(p), -p[1]);
+        }
+      });
+      if (pos.length < 6) return;
+      route.geometry.dispose();
+      route.geometry = new LineGeometry().setPositions(pos);
+      route.computeLineDistances();
+      route.visible = true;
+    }
+    // Dots stay ROUTE_DOT px across at the camera's target distance.
+    function sizeRouteDots() {
+      if (!route.visible) return;
+      const metresPerPx = (2 * camera.position.distanceTo(controls.target) * Math.tan(THREE.MathUtils.degToRad(camera.fov / 2))) / mount!.clientHeight;
+      routeMaterial.dashSize = ROUTE_DOT * metresPerPx;
+      routeMaterial.gapSize = ROUTE_GAP * metresPerPx;
+    }
+
+    // Shows a piece of equipment: its building and floor, or the spot outdoors, with the walk there,
+    // flown to so the whole walk is in view.
     async function goToNearest(n: Nearest) {
       const { building, level, at } = n.target;
-      const mesh = building && buildings.find((m) => (m.userData.building as Building).id === building);
+      const walk = walks.get(n) ?? null;
+      const mesh = (building && buildings.find((m) => (m.userData.building as Building).id === building)) || null;
       let spot: THREE.Vector3;
       if (mesh) {
         select(mesh);
         if (level) await showLevel(level);
         spot = new THREE.Vector3(at[0], (shownFloor?.y ?? mesh.position.y) + ROOM_LIFT, -at[1]);
       } else spot = new THREE.Vector3(at[0], groundAt!(...at), -at[1]);
-      flyTo(spot, ROOM_VIEW_DISTANCE);
       setFocus(spot, SAFETY_LABELS[n.kind], n.where);
+      showRoute(walk, mesh, spot.y - ROOM_LIFT);
+      const box = new THREE.Box3().setFromPoints([spot, ...(walk?.path ?? []).map(([x, y]) => new THREE.Vector3(x, spot.y, -y))]);
+      const span = box.getSize(new THREE.Vector3()).length();
+      flyTo(box.getCenter(new THREE.Vector3()).setY(spot.y), Math.max(ROOM_VIEW_DISTANCE, (span * 0.6) / Math.tan(THREE.MathUtils.degToRad(camera.fov / 2))));
     }
 
     // Selects a building, opens its ground floor and pins a spot on it (an outlet with no room).
@@ -1790,6 +1918,7 @@ export default function CampusViewer() {
     renderer.setAnimationLoop(() => {
       stepFlight();
       controls.update();
+      sizeRouteDots();
       renderer.render(scene, camera);
       placeMarkers();
     });
@@ -1807,13 +1936,17 @@ export default function CampusViewer() {
       getJson<Terrain>(TERRAIN_URL).catch(() => null),
       // Optional: without it, the ground has fills but no outlines.
       getJson<GroundLines>(GROUND_LINES_URL).catch((): GroundLines => ({})),
+      // Optional: without it, emergency distances are straight lines.
+      getJson<WalkGraph>(WALK_GRAPH_URL).catch(() => null),
     ])
-      .then(([data, extra, terrain, groundLines]) => {
+      .then(([data, extra, terrain, groundLines, walkGraph]) => {
         campus = data;
+        if (walkGraph) walker = new Walker(walkGraph);
         setSearchItems(searchIndex(data));
         massing = extra;
         addCampus(data, terrain ?? flatTerrain(data), groundLines);
         indexSafety(data);
+        indexDoors(data);
         addMapLabels(data);
         applyLink();
         linked = true;
