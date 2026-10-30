@@ -1,5 +1,8 @@
 @import "tailwindcss";
 
+/* dark: variants follow the map's theme (a .dark class on the viewer), not the OS setting. */
+@custom-variant dark (&:where(.dark, .dark *));
+
 :root {
   --background: #ffffff;
   --foreground: #171717;

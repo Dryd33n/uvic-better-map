@@ -5,7 +5,8 @@ export { buildDataset, makeFeature, mapFields, cleanValue, featuresOf, normName,
 export { renderOutputs, SCHEMA_VERSION } from './output.mjs';
 export { loaders, loadSource } from './loaders.mjs';
 export { writers, toGeoJSONFeature, toGeoJSONGeometry, toLocalFeature, toLocalRoom, roomIndex } from './writers.mjs';
-export { joinByField, computeField, washroomDetails, heightsFromFloors, overhangs, floorOutlines } from './enrichers.mjs';
+export { joinByField, computeField, washroomDetails, heightsFromFloors, overhangs, massing, floorOutlines } from './enrichers.mjs';
+export { terrain, HRDEM } from './terrain.mjs';
 export { validateDataset } from './validate.mjs';
 export { auditAgainstWebmap } from './audit.mjs';
 export * as geometry from './geometry.mjs';

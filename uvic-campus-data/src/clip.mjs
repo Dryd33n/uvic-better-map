@@ -27,6 +27,10 @@ function run(type, subject, clip = []) {
 export const union = (paths) => run(C.ClipType.ctUnion, paths);
 export const difference = (a, b) => run(C.ClipType.ctDifference, a, b);
 export const xor = (a, b) => run(C.ClipType.ctXor, a, b);
+export const intersection = (a, b) => run(C.ClipType.ctIntersection, a, b);
+
+/** Drop holes smaller than minArea square metres (light wells, unmapped shafts). */
+export const fillHoles = (paths, minArea) => paths.filter((p) => C.Clipper.Area(p) >= 0 || -C.Clipper.Area(p) / SCALE ** 2 >= minArea);
 
 /** Grow (metres > 0) or shrink (< 0) with square corners. */
 export function offset(paths, metres) {

@@ -12,8 +12,9 @@ npm run validate   # check dist/ is consistent and valid GeoJSON
 npm run serve      # local server with CORS, http://localhost:8080
 ```
 
-Node 18 or newer. Run `npm install` once: the build uses one dependency, `clipper-lib`, for the
-polygon unions behind `extras/overhangs.json`. The client library and templates have none.
+Node 18 or newer. Run `npm install` once: the build uses `clipper-lib` for the polygon unions
+behind `extras/massing.json`, and `geotiff` and `proj4` to read the terrain for
+`extras/terrain.json`. The client library and templates have no dependencies.
 
 ## What you get
 
@@ -96,6 +97,12 @@ your own site). If apps on other domains will read it, serve it with
 - **Heights are estimates.** The source has no building heights. Buildings with floor plans
   get `height` from their floor count at 4 m per storey (the source's own 3D layers use 4 m);
   others have none, and the 3D template falls back to 15 m (main) or 9 m (secondary).
+- **Terrain is lidar.** `extras/terrain.json` is a 4 m ground heightfield sampled from NRCan's
+  1 m bare-earth HRDEM (2018 Vancouver Island lidar, Open Government Licence – Canada; credit it
+  when you publish). The build reads only the campus window of the remote GeoTIFF. Each building
+  gets `ground`, the median of the ground just outside its footprint (Level 1 sits there; floor
+  elevations stay relative to it; `terrain({ overrides: { CODE: metres } })` sets one by hand). Buildings without floor plans that are really several
+  separate structures also get `grounds`, one per polygon.
 - **No routing graph.** Walkways are filled polygons, not a line network, so turn-by-turn
   routing would need a network derived from them. The templates link to Google Maps.
 - **Room-to-building matching** uses the room number prefix, then the building footprint,

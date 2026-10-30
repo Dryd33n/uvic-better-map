@@ -104,7 +104,8 @@ export function local(ds) {
     floors[b.id] = path;
   }
   // One-file bundle of every outdoor layer plus a compact room index: what templates/three-viewer loads.
-  const rooms = roomIndex(ds).filter((r) => r.type !== 0 && r.type !== 4).map((r) => [r.name, r.building, r.level, r.type]);
+  // Each room is [name, building, level, type], plus its label ("Vertigo") when it has one.
+  const rooms = roomIndex(ds).filter((r) => r.type !== 0 && r.type !== 4).map((r) => [r.name, r.building, r.level, r.type, ...(r.label ? [r.label] : [])]);
   files['campus.local.json'] = {
     source: ds.config.source?.title, sourceUrl: ds.config.source?.url, scrapedAt: ds.builtAt,
     origin: ds.config.origin, units: 'metres east (x) and north (y) of origin',

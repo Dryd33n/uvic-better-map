@@ -5,7 +5,8 @@
 // Add a layer, add a field, pull from your own GeoJSON, add an enricher or an
 // output format: see docs/EXTENDING.md for recipes.
 // ─────────────────────────────────────────────────────────────────────────────
-import { washroomDetails, heightsFromFloors, overhangs, floorOutlines } from '../src/enrichers.mjs';
+import { washroomDetails, heightsFromFloors, massing, floorOutlines, groundLines } from '../src/enrichers.mjs';
+import { terrain } from '../src/terrain.mjs';
 
 const ARCGIS = 'https://services2.arcgis.com/qRqOFxxnwUHOSocZ/arcgis/rest/services';
 // Shorthand for an ArcGIS Online feature layer in UVic's org.
@@ -114,8 +115,45 @@ export default {
   enrich: [
     washroomDetails({ source: agol('UVIC_Washrooms_cm'), roomField: 'Room', fields: { gender: 'Gender', access: 'Accessibility', features: 'Features' } }),
     heightsFromFloors({ roof: 0.5 }),
-    overhangs(), // skyways and upper floors outside the ground footprint, for 3D
+    massing(), // each storey where its floor plan reaches (wings, skyways), for 3D
     floorOutlines(), // each level's outline, for floor plates under the rooms
+    // The ground layers as outlines, for the 3D map's line drawing.
+    groundLines({
+      groups: {
+        boundary: ['boundary'],
+        green: ['forest', 'fields'],
+        trails: ['trails'],
+        roads: ['roads'],
+        parking: ['parking', 'reserved', 'shortParking'],
+        paths: ['walkways', 'paths'],
+        water: ['fountains'],
+      },
+    }),
+    // Lidar ground heightfield, and each building's ground level. Overrides are Level 1 in metres
+    // above sea level, where the median ground around a building puts it wrong.
+    terrain({
+      overrides: {
+        // Level 2 enters at grade: 57.2 m at 48°27'52.86"N 123°18'51.00"W. 52.6 + one storey + the
+        // 3D foundation put it at 57.0 m; lowered 0.3 m more by eye in the debug panel.
+        DTB: 52.3,
+        // Set by eye in the debug panel (Oct 2026); the median ground gave the value after "was".
+        SED: 56.3, // Sedgewick Building: was 56.5
+        ECS: 58.1, // Engineering and Computer Science Building: was 59.2
+        ELL: 58.2, // Elliott Building: was 58.3
+        MAC: 56.8, // Maclaurin Building: was 56.3
+        MCK: 61.3, // McKinnon Building: was 58.3
+        HSD: 52.6, // Human & Social Development Building: was 53.6
+        HHB: 56.5, // Hickman Building: was 56.8
+        DSB: 57.5, // David Strong Building: was 57.7
+        CSR: 59.1, // Bookstore: was 58.1
+        BEC: 57.4, // Business and Economics Building: was 55.9
+        ELW: 58.2, // Engineering Laboratory Wing: was 58.6
+        FIA: 54.8, // Fine Arts Building: was 55.1
+        VIA: 52.8, // Visual Arts: was 53.2
+        PNX: 53.3, // Phoenix Building: was 52.4
+        BWC: 59.2, // Bob Wright Centre: was 58.8
+      },
+    }),
   ],
 
   // ── Audit ──────────────────────────────────────────────────────────────────

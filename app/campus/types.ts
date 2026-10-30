@@ -35,16 +35,41 @@ export interface BuildingProps {
   height?: number;
   floors?: string[];
   floorKey?: string;
+  /** Ground level in metres above sea level, from the terrain DEM. */
+  ground?: number;
+  /** Per polygon, where the polygons are separate structures with their own ground (no floor plans). */
+  grounds?: number[];
 }
 
 /**
- * extras/overhangs.json: parts of buildings outside the ground-floor footprint (skyways,
- * overhangs), by building id. Each band is a solid outline spanning elev to top (metres).
+ * extras/massing.json: each building's storeys where its floor plans reach, by building id, bottom
+ * to top. Each band is a solid outline spanning elev to top (metres, top includes the roof); the
+ * ground band covers the footprint, higher ones may float (skyways).
  */
-export type Overhangs = Record<string, { level: string; elev: number; top: number; polys: LocalPolygon[] }[]>;
+export type Massing = Record<string, { level: string | null; elev: number; top: number; polys: LocalPolygon[] }[]>;
 
 /** extras/floorOutlines.json: each level's outline (its rooms unioned), by building id and level id. */
 export type FloorOutlines = Record<string, Record<string, LocalPolygon[]>>;
+
+/** extras/groundLines.json: each group of ground layers' outlines (unioned, footprints cut away), as rings. */
+export type GroundLines = Record<string, FlatRing[]>;
+
+/**
+ * extras/terrain.json: a lidar ground heightfield. heights[j * nx + i] is the ground at local
+ * (x0 + i·cell, y0 + j·cell) in decimetres above sea level; j = 0 is the south edge.
+ */
+export interface Terrain {
+  source: string;
+  licence: string;
+  cell: number;
+  x0: number;
+  y0: number;
+  nx: number;
+  ny: number;
+  /** Ground at the origin, metres: the scene's zero. */
+  ref: number;
+  heights: number[];
+}
 
 export interface Level {
   id: string;
@@ -63,6 +88,8 @@ export interface LocalRoom {
   lbl?: string;
   note?: string;
   link?: string;
+  /** Washrooms: who it's for ("Men", "Women", "All Gender") and access ("Accessible", ...). */
+  wash?: { gender?: string | null; access?: string | null };
 }
 
 /** floors/<BUILDING>.local.json: every level of one building, bottom to top. */
@@ -72,9 +99,15 @@ export interface FloorFile {
   floors: (Level & { rooms: LocalRoom[] })[];
 }
 
+/** A room in the bundle's search index (no corridors, stairs or lifts). */
+export type RoomEntry = [name: string, building: string, level: string, type: number, label?: string];
+
 export interface CampusBundle {
   origin: [lon: number, lat: number];
   storey: number;
   floorList: Level[];
+  /** Room type names by type number ("1": "Classroom"). */
+  roomTypes: Record<string, string>;
+  rooms: RoomEntry[];
   layers: Record<string, LocalLayer>;
 }

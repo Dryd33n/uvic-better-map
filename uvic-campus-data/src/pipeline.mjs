@@ -151,9 +151,16 @@ async function buildIndoor(ds, ctx) {
   const containing = (xy) => bl.features.find((b) =>
     b.bbox && b.bbox.xy[0] <= xy[0] && xy[0] <= b.bbox.xy[2] && b.bbox.xy[1] <= xy[1] && xy[1] <= b.bbox.xy[3] && pointInPolys(xy, b.geom.polys));
   const pattern = I.codePattern || /^([A-Za-z]{2,6})[\s_-]/;
+  // A room this far outside the building its name points to, inside another one, is mislabelled
+  // in the source (BWC level 2 corridors drawn in BEC): it goes to the building it's in.
+  const strayDistance = I.strayDistance ?? 30;
+  const far = (b, [x, y]) => {
+    const [x0, y0, x1, y1] = b.bbox?.xy ?? [x, y, x, y];
+    return x < x0 - strayDistance || x > x1 + strayDistance || y < y0 - strayDistance || y > y1 + strayDistance;
+  };
 
   const buildings = {};
-  let unassigned = 0;
+  let unassigned = 0, moved = 0;
   for (const level of I.levels) {
     const raw = await ctx.loadSource(level.source);
     let kept = 0;
@@ -162,8 +169,12 @@ async function buildIndoor(ds, ctx) {
       if (!f) continue;
       const name = f.props.name;
       const prefix = name && (String(name).match(pattern) || [])[1];
-      const b = (prefix && byCode.get(prefix.toUpperCase())) || containing(f.at.xy) || byName.get(normName(f.props.buildingName));
+      let b = (prefix && byCode.get(prefix.toUpperCase())) || containing(f.at.xy) || byName.get(normName(f.props.buildingName));
       if (!b) { unassigned++; continue; }
+      if (far(b, f.at.xy)) {
+        const inside = containing(f.at.xy);
+        if (inside && inside !== b) { b = inside; moved++; }
+      }
       delete f.props.buildingName;
       if (f.props.type != null && I.roomTypes?.[f.props.type]) f.props.typeName = I.roomTypes[f.props.type];
       f.building = b.id;
@@ -177,6 +188,7 @@ async function buildIndoor(ds, ctx) {
     ctx.log(`level ${level.id.padEnd(8)} ${String(kept).padStart(5)} rooms`);
   }
   if (unassigned) ctx.log(`(${unassigned} rooms matched no building and were skipped)`);
+  if (moved) ctx.log(`(${moved} rooms lay in another building than their name says and were moved to it)`);
 
   // Order each building's levels as in the config, give rooms unique ids, tag buildings.
   const order = I.levels.map((l) => l.id);
