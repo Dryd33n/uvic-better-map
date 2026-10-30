@@ -1,12 +1,14 @@
 "use client";
 
-import { useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import * as THREE from "three";
 import { MapControls } from "three/addons/controls/MapControls.js";
 import { mergeGeometries } from "three/addons/utils/BufferGeometryUtils.js";
 import DebugPanel, { type DebugPoint, type DebugSnapshot } from "./debug-panel";
 import { ICONS, type IconName } from "./icons";
+import EmergencySection, { SAFETY_LABELS, type Nearest } from "./emergency";
 import SearchBox, { type SearchItem } from "./search";
+import { THEMES, withEdits, type Palette, type ThemeEdits, type ThemeName } from "./theme";
 import { PANEL } from "./ui";
 import type { BuildingProps, CampusBundle, FloorFile, FloorOutlines, GroundLines, Level, LocalFeature, LocalPolygon, LocalRoom, Massing, Terrain } from "./types";
 
@@ -23,66 +25,6 @@ const AREAS = ["boundary", "forest", "fields", "trails", "roads", "parking", "re
 // The ground layers' outlines (extras/groundLines.json), drawn as lines over the fills.
 const GROUND_LINES = ["boundary", "green", "trails", "roads", "parking", "paths", "water"];
 
-// Monochrome, white buildings, one accent for hover and selection. Dark is the default.
-export type ThemeName = "dark" | "light";
-interface Palette {
-  sky: string;
-  offCampus: string; // terrain outside the campus land
-  areas: Record<string, string>;
-  lines: Record<string, string>;
-  // A faint world grid on the terrain: every 10 m, stronger every 100 m.
-  grid: { color: string; minor: number; major: number };
-  light: { sky: string; ground: string; hemi: number; sun: number };
-  building: { Main: string; Secondary: string; hover: string; selected: string; foundation: string };
-  edge: string;
-  accent: string;
-  // Floor plans: the cut top, the floor plate, room outlines, stairs and lifts.
-  cap: string;
-  slab: string;
-  room: string;
-  stairs: string;
-  pit: string; // inside walls of a floor cut below the ground beside it
-}
-const THEMES: Record<ThemeName, Palette> = {
-  dark: {
-    sky: "#0b0d10",
-    offCampus: "#0c0e11",
-    areas: {
-      boundary: "#15181c", forest: "#14181a", fields: "#151a1b", trails: "#181b1f", roads: "#1d2126", parking: "#1a1d21",
-      reserved: "#1a1d21", shortParking: "#1a1d21", walkways: "#22262b", paths: "#22262b", fountains: "#16212a", construction: "#1f1e1b",
-    },
-    lines: { boundary: "#5d6671", green: "#2f3a3a", trails: "#3a4046", roads: "#4d5560", parking: "#3d444c", paths: "#474e57", water: "#3f5d72" },
-    grid: { color: "#ffffff", minor: 0.035, major: 0.07 },
-    light: { sky: "#ffffff", ground: "#1a1d22", hemi: 1.2, sun: 1.5 },
-    building: { Main: "#eef0f3", Secondary: "#dfe3e8", hover: "#c4f0ff", selected: "#86def8", foundation: "#353a41" },
-    edge: "#7c8591",
-    accent: "#4cc9f0",
-    cap: "#d7dce2",
-    slab: "#272c34",
-    room: "#c9d1db",
-    stairs: "#3b424c",
-    pit: "#262a30",
-  },
-  light: {
-    sky: "#eef0f2",
-    offCampus: "#dcdfe3",
-    areas: {
-      boundary: "#e7e9ec", forest: "#e0e4e1", fields: "#dde3de", trails: "#e5e3de", roads: "#d3d6da", parking: "#d9dce0",
-      reserved: "#d9dce0", shortParking: "#d9dce0", walkways: "#f3f4f6", paths: "#f3f4f6", fountains: "#d3dfe8", construction: "#e9e4da",
-    },
-    lines: { boundary: "#8c949e", green: "#b9c3bc", trails: "#c3bdb2", roads: "#a7aeb6", parking: "#b5bbc2", paths: "#bcc2c9", water: "#93adc0" },
-    grid: { color: "#000000", minor: 0.04, major: 0.08 },
-    light: { sky: "#ffffff", ground: "#9aa0a6", hemi: 1.3, sun: 1.5 },
-    building: { Main: "#ffffff", Secondary: "#f1f2f4", hover: "#d6f0fb", selected: "#a4d6f0", foundation: "#b4b9c0" },
-    edge: "#9aa1aa",
-    accent: "#0a84c6",
-    cap: "#ffffff",
-    slab: "#eceef1",
-    room: "#4b5563",
-    stairs: "#d3d8de",
-    pit: "#c7ccd2",
-  },
-};
 // The ground layers are drawn into this texture, then draped over the terrain.
 const GROUND_TEXTURE = 4096;
 // Ground outlines are sampled this often along their edges and drawn this far above the terrain.
@@ -103,6 +45,7 @@ const HEIGHT_DEFAULT = 11;
 // Floor plans, bottom to top: the cut top of the building (roof wherever the floor doesn't reach),
 // the floor plate, stairs and lifts filled, then every room's outline.
 const ROOM_CORRIDOR = 0;
+const ROOM_CLASSROOM = 1;
 const ROOM_WASHROOM = 2;
 const ROOM_FOOD = 3;
 const ROOM_STAIRS = 4;
@@ -113,10 +56,27 @@ const CORRIDOR_SEAM = 0.15;
 const LABEL_MIN_ROOM_PX = 28;
 const ICON_MIN_ROOM_PX = 12;
 const POINT_SIZE = 4;
+// Parking lot labels show once this many metres span the label's width on screen.
+const LOT_LABEL_SIZE = 60;
 // Camera flights to a found room or building: how long, and how far from it they end.
 const FLIGHT_MS = 900;
 const ROOM_VIEW_DISTANCE = 70;
 const BUILDING_VIEW_DISTANCE = 220;
+// The focus pin over something the panel sent you to: a pulsing red ring (FOCUS_RING px across,
+// centred on the spot) above a card with its name and where it is.
+const FOCUS_RING = 44;
+const FOCUS_PIN = `<span class="relative grid h-[44px] w-[44px] shrink-0 place-items-center">
+  <span class="absolute inset-0 animate-ping rounded-full bg-red-500/50"></span>
+  <span class="absolute inset-[10px] rounded-full border-2 border-red-500"></span>
+  <span class="relative h-3 w-3 rounded-full border-2 border-white bg-red-500 shadow"></span>
+</span>
+<span class="mt-1 w-max max-w-[220px] rounded bg-red-600 px-2 py-0.5 text-center font-sans text-[11px] leading-tight text-white shadow-lg">
+  <span data-name class="block font-semibold"></span>
+  <span data-where class="block opacity-90"></span>
+</span>`;
+// Nearest safety equipment, by layer (= kind): each floor up or down counts as this many metres.
+const SAFETY_KINDS = ["aed", "naloxone", "phones"] as const;
+const FLOOR_COST = 25;
 // Point layers shown on floor plans, with their icon and rank (lower places first).
 const POINT_MARKERS: [layer: string, icon: IconName, rank: number][] = [
   ["aed", "aed", 0],
@@ -139,6 +99,15 @@ function readThemeStored(): ThemeName {
     return localStorage.getItem(THEME_KEY) === "light" ? "light" : "dark";
   } catch {
     return "dark";
+  }
+}
+const THEME_EDITS_KEY = "campus-theme-edits";
+function readThemeEdits(): Record<ThemeName, ThemeEdits> {
+  try {
+    const stored = JSON.parse(localStorage.getItem(THEME_EDITS_KEY) ?? "{}") as Partial<Record<ThemeName, ThemeEdits>>;
+    return { dark: stored.dark ?? {}, light: stored.light ?? {} };
+  } catch {
+    return { dark: {}, light: {} };
   }
 }
 const DEBUG_KEY = "campus-debug";
@@ -210,6 +179,21 @@ function searchIndex(data: CampusBundle): SearchItem[] {
       terms: lower(name, number, b?.code, b?.name, b?.fullName, data.roomTypes?.[type]),
       building,
       room: { name, level },
+      classroom: type === ROOM_CLASSROOM,
+    });
+  }
+  // Food outlets the floor plans have no room for: found as a spot on their building's ground floor.
+  for (const f of data.layers.food?.features ?? []) {
+    if (f.props.room) continue;
+    const b = buildings.find((o) => (o.polys ?? []).some((q) => inRing(q[0], f.at)));
+    if (!b) continue;
+    items.push({
+      kind: "place",
+      title: String(f.props.name),
+      detail: ["Food", b.props.fullName ?? b.props.name].filter(Boolean).join(" · "),
+      terms: lower("food", b.props.code, b.props.name, b.props.fullName),
+      building: b.id,
+      at: f.at,
     });
   }
   return items;
@@ -365,9 +349,10 @@ function edgeLines(blocks: { polys: LocalPolygon[]; from: number; to: number }[]
   return g;
 }
 
-// Adds the world grid to the terrain's material: lines every 10 m and 100 m in world x/z, faded
+// Adds the world grid to the terrain's material: lines every gridSpacing and gridMajorSpacing
+// metres in world x/z (turned by gridAngle), faded
 // out where they'd be closer together than a few pixels.
-function withGrid(material: THREE.MeshLambertMaterial, uniforms: { gridColor: { value: THREE.Color }; gridMinor: { value: number }; gridMajor: { value: number } }) {
+function withGrid(material: THREE.MeshLambertMaterial, uniforms: { gridColor: { value: THREE.Color }; gridMinor: { value: number }; gridMajor: { value: number }; gridAngle: { value: number }; gridSpacing: { value: number }; gridMajorSpacing: { value: number } }) {
   material.onBeforeCompile = (shader) => {
     Object.assign(shader.uniforms, uniforms);
     shader.vertexShader = shader.vertexShader
@@ -379,7 +364,7 @@ function withGrid(material: THREE.MeshLambertMaterial, uniforms: { gridColor: { 
         `#include <common>
 varying vec2 vGrid;
 uniform vec3 gridColor;
-uniform float gridMinor, gridMajor;
+uniform float gridMinor, gridMajor, gridAngle, gridSpacing, gridMajorSpacing;
 float gridLine(vec2 p, float size) {
   vec2 c = p / size;
   vec2 w = fwidth(c);
@@ -390,7 +375,8 @@ float gridLine(vec2 p, float size) {
       .replace(
         "#include <map_fragment>",
         `#include <map_fragment>
-diffuseColor.rgb = mix(diffuseColor.rgb, gridColor, max(gridLine(vGrid, 10.0) * gridMinor, gridLine(vGrid, 100.0) * gridMajor));`,
+vec2 gp = mat2(cos(gridAngle), sin(gridAngle), -sin(gridAngle), cos(gridAngle)) * vGrid;
+diffuseColor.rgb = mix(diffuseColor.rgb, gridColor, max(gridLine(gp, gridSpacing) * gridMinor, gridLine(gp, gridMajorSpacing) * gridMajor));`,
       );
   };
 }
@@ -471,19 +457,24 @@ export default function CampusViewer() {
     clearPin(): void;
     setGroundOffset(metres: number): void;
     clearGroundOffsets(): void;
-    setTheme(theme: ThemeName): void;
+    setTheme(palette: Palette): void;
     clearRoom(): void;
     find(item: SearchItem): void;
+    goToNearest(item: Nearest): void;
   } | null>(null);
   // Chosen this visit, else as left last time (dark until hydrated, and by default).
   const [themeChosen, setTheme] = useState<ThemeName | null>(null);
   const themeStored = useSyncExternalStore(noSubscribe, readThemeStored, () => "dark" as const);
   const theme = themeChosen ?? themeStored;
+  // Theme editor changes (debug panel), per theme; kept across reloads.
+  const [themeEdits, setThemeEdits] = useState<Record<ThemeName, ThemeEdits>>(readThemeEdits);
+  const palette = useMemo(() => withEdits(THEMES[theme], themeEdits[theme]), [theme, themeEdits]);
   const [status, setStatus] = useState<"loading" | "ready" | "error">("loading");
   const [error, setError] = useState<string | null>(null);
   const [hovered, setHovered] = useState<BuildingProps | null>(null);
   const [selected, setSelected] = useState<BuildingProps | null>(null);
   const [room, setRoom] = useState<RoomInfo | null>(null);
+  const [emergency, setEmergency] = useState<Nearest[]>([]);
   const [searchItems, setSearchItems] = useState<SearchItem[]>([]);
   const [floors, setFloors] = useState<FloorPicker>(null);
   // Opened or closed this visit, else as left last time (read after hydration; false on the server).
@@ -507,8 +498,13 @@ export default function CampusViewer() {
     sceneApi.current?.setDebug(debugOpen);
   }, [debugOpen, status]);
   useEffect(() => {
-    sceneApi.current?.setTheme(theme);
-  }, [theme, status]);
+    sceneApi.current?.setTheme(palette);
+  }, [palette, status]);
+  useEffect(() => {
+    try {
+      localStorage.setItem(THEME_EDITS_KEY, JSON.stringify(themeEdits));
+    } catch {}
+  }, [themeEdits]);
   useEffect(() => {
     if (themeChosen === null) return;
     try {
@@ -538,7 +534,7 @@ export default function CampusViewer() {
     let palette = THEMES.dark;
     const scene = new THREE.Scene();
     scene.background = new THREE.Color(palette.sky);
-    scene.fog = new THREE.Fog(palette.sky, 1800, 5000);
+    scene.fog = new THREE.Fog(palette.sky, palette.fog.near, palette.fog.far);
     const camera = new THREE.PerspectiveCamera(40, 1, 5, 12000);
     camera.position.set(100, 850, 750);
 
@@ -609,18 +605,20 @@ export default function CampusViewer() {
     // lines, and the grid in the terrain's shader.
     const areaMaterials = Object.fromEntries(AREAS.map((key) => [key, new THREE.MeshBasicMaterial({ depthWrite: false })]));
     const lineMaterials = Object.fromEntries(GROUND_LINES.map((key) => [key, new THREE.LineBasicMaterial()]));
-    const grid = { gridColor: { value: new THREE.Color() }, gridMinor: { value: 0 }, gridMajor: { value: 0 } };
+    const grid = { gridColor: { value: new THREE.Color() }, gridMinor: { value: 0 }, gridMajor: { value: 0 }, gridAngle: { value: 0 }, gridSpacing: { value: 10 }, gridMajorSpacing: { value: 100 } };
     let drawGround: (() => void) | null = null;
     disposables.push(
       ...Object.values(materials), ...Object.values(foundations), ...Object.values(edgeMaterials), ...Object.values(areaMaterials), ...Object.values(lineMaterials),
       capMaterial, slabMaterial, stairsMaterial, roomLineMaterial, roomFillMaterial, roomOutlineMaterial, pitMaterial,
     );
 
-    function applyTheme(name: ThemeName) {
-      palette = THEMES[name];
-      const p = palette;
+    function applyTheme(p: Palette) {
+      palette = p;
       (scene.background as THREE.Color).set(p.sky);
-      scene.fog!.color.set(p.sky);
+      const fog = scene.fog as THREE.Fog;
+      fog.color.set(p.sky);
+      fog.near = p.fog.near;
+      fog.far = p.fog.far;
       hemi.color.set(p.light.sky);
       hemi.groundColor.set(p.light.ground);
       hemi.intensity = p.light.hemi;
@@ -636,6 +634,7 @@ export default function CampusViewer() {
       stairsMaterial.color.set(p.stairs);
       roomLineMaterial.color.set(p.room);
       roomFillMaterial.color.set(p.accent);
+      roomFillMaterial.opacity = p.roomSelect;
       roomOutlineMaterial.color.set(p.accent);
       pitMaterial.color.set(p.pit);
       for (const [k, m] of Object.entries(areaMaterials)) m.color.set(p.areas[k]);
@@ -643,9 +642,12 @@ export default function CampusViewer() {
       grid.gridColor.value.set(p.grid.color);
       grid.gridMinor.value = p.grid.minor;
       grid.gridMajor.value = p.grid.major;
+      grid.gridAngle.value = THREE.MathUtils.degToRad(p.grid.angle);
+      grid.gridSpacing.value = Math.max(0.5, p.grid.spacing);
+      grid.gridMajorSpacing.value = Math.max(0.5, p.grid.majorSpacing);
       drawGround?.();
     }
-    applyTheme("dark");
+    applyTheme(palette);
 
     // Building meshes, for picking, and what each one needs for its floor plans.
     const buildings: THREE.Mesh[] = [];
@@ -871,6 +873,8 @@ export default function CampusViewer() {
     function addMarkers(b: Building, level: Level, rooms: LocalRoom[], y: number) {
       type Item = { rank: number; size: number; at: [number, number]; icons: (IconName | "wc")[]; accessible?: boolean; name?: string; number?: string };
       const items: Item[] = [];
+      // Rooms a food outlet is in (named by the data package), whatever their room type.
+      const outletRooms = new Set((campus?.layers.food?.features ?? []).map((f) => f.props.room as string | undefined).filter(Boolean));
       for (const r of rooms) {
         const size = Math.sqrt(r.polys.reduce((a, p) => a + ringArea(p[0]) - p.slice(1).reduce((h, q) => h + ringArea(q), 0), 0));
         const number = (r.n ?? "").replace(/^[A-Za-z]+\s+/, "");
@@ -880,8 +884,14 @@ export default function CampusViewer() {
           const icon = gender === "Men" ? "men" : gender === "Women" ? "women" : gender === "All Gender" ? "allGender" : "wc";
           items.push({ ...base, rank: 2, icons: [icon], accessible: !!r.wash?.access?.startsWith("Accessible") });
         } else if (r.t === ROOM_STAIRS) items.push({ ...base, ...(/^L\d/i.test(number) ? { rank: 1, icons: ["elevator" as const] } : { rank: 6, icons: ["stairs" as const] }) });
-        else if (r.t === ROOM_FOOD) items.push({ ...base, rank: 3, icons: ["food"], name: r.lbl });
+        else if (r.t === ROOM_FOOD || outletRooms.has(r.n ?? "")) items.push({ ...base, rank: 3, icons: ["food"], name: r.lbl });
         else if (r.t !== ROOM_CORRIDOR && (r.lbl || number)) items.push({ ...base, rank: r.lbl ? 4 : 5, icons: [], name: r.lbl, number });
+      }
+      // Food outlets without a room in the floor plans: on the building's ground floor.
+      if (level.id === groundLevel(levelsOf(b))) {
+        for (const f of campus?.layers.food?.features ?? []) {
+          if (!f.props.room && (b.polys ?? []).some((p) => inRing(p[0], f.at))) items.push({ rank: 3, size: POINT_SIZE, at: f.at, icons: ["food"], name: String(f.props.name ?? "") || undefined });
+        }
       }
       // Point layers placed by building and level ("Level 1").
       for (const [key, icon, rank] of POINT_MARKERS) {
@@ -927,11 +937,36 @@ export default function CampusViewer() {
       }
       placeMarkers();
     }
+    // The spot something was found at (an AED the panel sent you to): a pulsing pin with its name,
+    // always shown, which other markers make way for. Cleared by the next click on the map.
+    let focus: { el: HTMLDivElement; at: THREE.Vector3 } | null = null;
+    function setFocus(at: THREE.Vector3 | null, label = "", detail = "") {
+      focus?.el.remove();
+      focus = null;
+      if (!at) return;
+      const el = document.createElement("div");
+      el.className = "absolute left-0 top-0 flex w-0 flex-col items-center";
+      el.innerHTML = FOCUS_PIN;
+      const name = el.querySelector("[data-name]")!, where = el.querySelector("[data-where]")!;
+      name.textContent = label;
+      if (detail) where.textContent = detail[0].toUpperCase() + detail.slice(1);
+      else where.remove();
+      markerLayer.append(el);
+      focus = { el, at };
+    }
+
     function placeMarkers() {
-      if (!markers.length) return;
       const { clientWidth: w, clientHeight: h } = mount!;
-      const pxPerMetreAt1 = h / 2 / Math.tan(THREE.MathUtils.degToRad(camera.fov / 2));
       const placed: number[][] = [];
+      if (focus) {
+        projected.copy(focus.at).project(camera);
+        const x = ((projected.x + 1) / 2) * w, y = ((1 - projected.y) / 2) * h;
+        focus.el.style.transform = "translate(" + Math.round(x) + "px, " + Math.round(y - FOCUS_RING / 2) + "px)";
+        focus.el.style.visibility = projected.z < 1 ? "visible" : "hidden";
+        const card = focus.el.lastElementChild as HTMLElement;
+        placed.push([x - Math.max(FOCUS_RING, card.offsetWidth) / 2, y - FOCUS_RING / 2, x + Math.max(FOCUS_RING, card.offsetWidth) / 2, y + FOCUS_RING / 2 + card.offsetHeight + 4]);
+      }
+      const pxPerMetreAt1 = h / 2 / Math.tan(THREE.MathUtils.degToRad(camera.fov / 2));
       for (const m of markers) {
         projected.copy(m.at).project(camera);
         const x = ((projected.x + 1) / 2) * w, y = ((1 - projected.y) / 2) * h;
@@ -948,6 +983,41 @@ export default function CampusViewer() {
         }
         m.el.style.visibility = show ? "visible" : "hidden";
       }
+      // Map labels last: they make way for everything on a floor plan.
+      for (const m of mapLabels) {
+        projected.copy(m.at).project(camera);
+        const x = ((projected.x + 1) / 2) * w, y = ((1 - projected.y) / 2) * h;
+        const box = [x - m.w / 2 - 2, y - m.h / 2 - 1, x + m.w / 2 + 2, y + m.h / 2 + 1];
+        const show =
+          projected.z < 1 &&
+          box[0] >= 0 && box[2] <= w && box[1] >= 0 && box[3] <= h &&
+          (LOT_LABEL_SIZE * pxPerMetreAt1) / camera.position.distanceTo(m.at) >= m.w &&
+          !placed.some((b) => b[0] < box[2] && box[0] < b[2] && b[1] < box[3] && box[1] < b[3]);
+        if (show) {
+          placed.push(box);
+          m.el.style.transform = "translate(" + Math.round(box[0] + 2) + "px, " + Math.round(box[1] + 1) + "px)";
+        }
+        m.el.style.visibility = show ? "visible" : "hidden";
+      }
+    }
+
+    // ── map labels ──
+    // Parking lot names on the ground ("P Lot 6"), shown once a lot is about as wide on screen as
+    // its label.
+    const mapLabels: { el: HTMLDivElement; at: THREE.Vector3; w: number; h: number }[] = [];
+    function addMapLabels(data: CampusBundle) {
+      for (const f of data.layers.lots?.features ?? []) {
+        const name = String(f.props.name ?? "").trim();
+        if (!name || !groundAt) continue;
+        const el = document.createElement("div");
+        el.className = MARKER_CLASS + " !flex-row gap-1 uppercase tracking-wider";
+        const chip = document.createElement("span");
+        chip.className = CHIP_CLASS;
+        chip.innerHTML = ICONS.parking;
+        el.append(chip, name);
+        markerLayer.append(el);
+        mapLabels.push({ el, at: new THREE.Vector3(f.at[0], groundAt(...f.at) + LINE_LIFT, -f.at[1]), w: el.offsetWidth, h: el.offsetHeight });
+      }
     }
 
     function clearPlan() {
@@ -956,6 +1026,7 @@ export default function CampusViewer() {
       plan.clear();
       markers.forEach((m) => m.el.remove());
       markers = [];
+      setFocus(null);
       cut.constant = NO_CUT;
       pit.visible = false;
       shownLevel = null;
@@ -1043,7 +1114,8 @@ export default function CampusViewer() {
         setRoom({
           title: room.lbl ?? room.n ?? "Room",
           name: room.n,
-          type: campus?.roomTypes[room.t],
+          // A room a food outlet is in is a food service, whatever the floor plan calls it.
+          type: campus?.roomTypes[(campus?.layers.food?.features ?? []).some((f) => f.props.room === room.n) ? ROOM_FOOD : room.t],
           building: b.props.fullName ?? b.props.name ?? b.id,
           level: level.label,
           wash: room.wash ?? undefined,
@@ -1051,6 +1123,7 @@ export default function CampusViewer() {
           link: room.link,
         });
       } else setRoom(null);
+      updateEmergency();
       publish();
     }
 
@@ -1083,6 +1156,83 @@ export default function CampusViewer() {
       selectRoom(room);
       flyTo(new THREE.Vector3(room.at[0], shownFloor.y, -room.at[1]), ROOM_VIEW_DISTANCE);
     }
+    // ── emergency ──
+    // AEDs, naloxone kits and emergency phones, each in the building whose footprint holds it, on
+    // its level (matched by label, "Level 1"), or outdoors; for the info panels' emergency section.
+    type Safety = { kind: Nearest["kind"]; at: [number, number]; mesh: THREE.Mesh | null; level: Level | null; where?: string };
+    let safety: Safety[] = [];
+    function indexSafety(data: CampusBundle) {
+      safety = SAFETY_KINDS.flatMap((kind) =>
+        (data.layers[kind]?.features ?? []).map((f) => ({
+          kind,
+          at: f.at,
+          mesh: buildings.find((m) => ((m.userData.building as Building).polys ?? []).some((q) => inRing(q[0], f.at))) ?? null,
+          level: data.floorList.find((l) => l.label === f.props.level) ?? null,
+          where: typeof f.props.where === "string" ? f.props.where : undefined,
+        })),
+      );
+    }
+    // Scene height of a piece of equipment's floor: its building's level, else the ground there.
+    const safetyY = (e: Safety) => (e.mesh ? e.mesh.position.y + (e.level?.elev ?? 0) : groundAt!(...e.at));
+
+    // The nearest of each kind to the selected room, else to the selected building's ground floor.
+    function updateEmergency() {
+      const b = selectedMesh?.userData.building as Building | undefined;
+      const from = selectedRoom && shownFloor ? { at: selectedRoom.at, y: shownFloor.y } : b && selectedMesh ? { at: b.at, y: selectedMesh.position.y } : null;
+      if (!from) return setEmergency([]);
+      const storey = campus?.storey ?? 4;
+      const items: Nearest[] = [];
+      for (const kind of SAFETY_KINDS) {
+        let best: Nearest | null = null, bestCost = Infinity;
+        for (const e of safety) {
+          if (e.kind !== kind) continue;
+          const distance = Math.hypot(e.at[0] - from.at[0], e.at[1] - from.at[1]);
+          const floors = Math.round((safetyY(e) - from.y) / storey);
+          const cost = distance + FLOOR_COST * Math.abs(floors);
+          if (cost >= bestCost) continue;
+          const home = e.mesh?.userData.building as Building | undefined;
+          bestCost = cost;
+          best = {
+            kind, distance, floors,
+            building: home && (home === b ? "This building" : (home.props.fullName ?? home.props.name)),
+            level: e.level?.label,
+            // The notes often repeat the level ("Level 1, near D wing").
+            where: e.where?.replace(/^level\s+\w+\s*,?\s*/i, "") || undefined,
+            target: { building: home?.id, level: e.level?.id, at: e.at },
+          };
+        }
+        if (best) items.push(best);
+      }
+      setEmergency(items);
+    }
+
+    // Shows a piece of equipment: its building and floor, flown to; or the spot outdoors.
+    async function goToNearest(n: Nearest) {
+      const { building, level, at } = n.target;
+      const mesh = building && buildings.find((m) => (m.userData.building as Building).id === building);
+      let spot: THREE.Vector3;
+      if (mesh) {
+        select(mesh);
+        if (level) await showLevel(level);
+        spot = new THREE.Vector3(at[0], (shownFloor?.y ?? mesh.position.y) + ROOM_LIFT, -at[1]);
+      } else spot = new THREE.Vector3(at[0], groundAt!(...at), -at[1]);
+      flyTo(spot, ROOM_VIEW_DISTANCE);
+      setFocus(spot, SAFETY_LABELS[n.kind], n.where);
+    }
+
+    // Selects a building, opens its ground floor and pins a spot on it (an outlet with no room).
+    async function goToPlace(buildingId: string, at: [number, number], label: string) {
+      const mesh = buildings.find((m) => (m.userData.building as Building).id === buildingId);
+      if (!mesh) return;
+      select(mesh);
+      const b = mesh.userData.building as Building;
+      const levels = levelsOf(b);
+      if (levels.length) await showLevel(groundLevel(levels));
+      const spot = new THREE.Vector3(at[0], (shownFloor?.y ?? mesh.position.y) + ROOM_LIFT, -at[1]);
+      flyTo(spot, ROOM_VIEW_DISTANCE);
+      setFocus(spot, label);
+    }
+
     function goToBuilding(buildingId: string) {
       const mesh = buildings.find((m) => (m.userData.building as Building).id === buildingId);
       if (!mesh) return;
@@ -1154,6 +1304,7 @@ export default function CampusViewer() {
       const levels = b?.props.floorKey ? levelsOf(b) : [];
       setFloors(null);
       if (levels.length) void showLevel(groundLevel(levels));
+      updateEmergency();
       publish();
     }
 
@@ -1255,7 +1406,11 @@ export default function CampusViewer() {
     sceneApi.current = {
       deselect: () => select(null),
       clearRoom: () => selectRoom(null),
-      find: (item) => (item.room ? void goToRoom(item.building, item.room.level, item.room.name) : goToBuilding(item.building)),
+      goToNearest: (item) => void goToNearest(item),
+      find: (item) =>
+        item.room ? void goToRoom(item.building, item.room.level, item.room.name)
+        : item.at ? void goToPlace(item.building, item.at, item.title)
+        : goToBuilding(item.building),
       showLevel: (id) => void showLevel(id),
       setDebug: (open) => {
         debugOn = open;
@@ -1310,6 +1465,7 @@ export default function CampusViewer() {
       // A click, not the end of a drag.
       if (!downAt || Math.hypot(e.clientX - downAt[0], e.clientY - downAt[1]) > 5) return;
       if (debugOn) pinned = probe(e);
+      setFocus(null);
       const hit = pick(e);
       if (hit && hit === selectedMesh && shownFloor) selectRoom(roomAt());
       else select(hit);
@@ -1348,6 +1504,8 @@ export default function CampusViewer() {
         setSearchItems(searchIndex(data));
         massing = extra;
         addCampus(data, terrain ?? flatTerrain(data), groundLines);
+        indexSafety(data);
+        addMapLabels(data);
         applyLink();
         setStatus("ready");
       })
@@ -1370,6 +1528,7 @@ export default function CampusViewer() {
       renderer.setAnimationLoop(null);
       controls.dispose();
       clearPlan();
+      mapLabels.forEach((l) => l.el.remove());
       disposables.forEach((d) => d.dispose());
       buildings.forEach((m) => {
         m.geometry.dispose();
@@ -1440,6 +1599,7 @@ export default function CampusViewer() {
               Room page ↗
             </a>
           )}
+          <EmergencySection items={emergency} onGo={(n) => sceneApi.current?.goToNearest(n)} />
         </aside>
       )}
       {selected && !room && (
@@ -1459,6 +1619,7 @@ export default function CampusViewer() {
               Building page ↗
             </a>
           )}
+          <EmergencySection items={emergency} onGo={(n) => sceneApi.current?.goToNearest(n)} />
         </aside>
       )}
       </div>
@@ -1508,6 +1669,10 @@ export default function CampusViewer() {
           onClearPin={() => sceneApi.current?.clearPin()}
           onGroundOffset={(m) => sceneApi.current?.setGroundOffset(m)}
           onClearGroundOffsets={() => sceneApi.current?.clearGroundOffsets()}
+          theme={theme}
+          onTheme={setTheme}
+          themeEdits={themeEdits}
+          onThemeEdits={setThemeEdits}
         />
       )}
 

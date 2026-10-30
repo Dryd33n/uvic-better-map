@@ -3,6 +3,7 @@
 // See docs/EXTENDING.md for how to write your own.
 
 import { mapFields, featuresOf, normRoom } from './pipeline.mjs';
+import { pointInPolys } from './geometry.mjs';
 import { toPaths, union, difference, intersection, xor, offset, close, open, area, toLocalPolys, fillHoles } from './clip.mjs';
 
 /**
@@ -266,4 +267,48 @@ export function groundLines({ name = 'groundLines', groups, minArea = 2 } = {}) 
     ds.extras[name] = out;
     ctx.log(`${name}: ${rings} rings in ${Object.keys(out).length} groups`);
   };
+}
+
+/**
+ * Food outlets onto their rooms: each outlet point (a layer with `name` and an `about` link) names
+ * the room it's in, so floor plans and search show "Mystic Market" rather than "JCC B112". The room
+ * is a food-service room containing the point (any level), else the nearest within `near` metres,
+ * else a non-corridor room containing it on `groundLevel`. The room gets the outlet's name as its
+ * label (outlets sharing a room are joined with " / ") and its link; the outlet gets `room` and
+ * `level`. Outlets with no room keep neither, for apps to place by building. `rooms` names an
+ * outlet's room by hand ({ Starbucks: 'CSR 050' }) where the geometry picks wrong.
+ */
+export function foodOutlets({ layer = 'food', foodType = 3, corridorType = 0, near = 10, groundLevel = '1', rooms: byHand = {} } = {}) {
+  function foodOutletsEnricher(ds, ctx) {
+    if (!ds.indoor) return;
+    const footprints = ds.layers[ds.config.indoor.buildingsLayer]?.features || [];
+    const placed = new Map(); // room -> outlet names
+    let matched = 0;
+    for (const f of ds.layers[layer]?.features || []) {
+      const xy = f.at?.xy;
+      const b = xy && footprints.find((o) => o.geom?.polys && pointInPolys(xy, o.geom.polys));
+      const levels = (b && ds.indoor.buildings[b.id]?.levels) || [];
+      const rooms = levels.flatMap(({ id, rooms }) => rooms.map((r) => ({ r, level: id })));
+      const contains = ({ r }) => pointInPolys(xy, r.geom.polys);
+      const food = rooms.filter(({ r }) => r.props.type === foodType);
+      const dist = ({ r }) => Math.hypot(r.at.xy[0] - xy[0], r.at.xy[1] - xy[1]);
+      const hit =
+        rooms.find((x) => x.r.props.name === byHand[f.props.name]) ??
+        food.find(contains) ??
+        food.filter((x) => dist(x) <= near).sort((p, q) => dist(p) - dist(q))[0] ??
+        rooms.find((x) => x.level === groundLevel && x.r.props.type !== corridorType && contains(x));
+      if (!hit) continue;
+      const names = placed.get(hit.r) ?? [];
+      names.push(f.props.name);
+      placed.set(hit.r, names);
+      hit.r.props.label = names.join(' / ');
+      if (/^https?:/i.test(f.props.about ?? '')) hit.r.props.link = f.props.about;
+      f.props.room = hit.r.props.name;
+      f.props.level = hit.level;
+      matched++;
+    }
+    ctx.log(`foodOutlets: ${matched} of ${ds.layers[layer]?.features.length ?? 0} outlets placed in rooms`);
+  }
+  foodOutletsEnricher.needsIndoor = true;
+  return foodOutletsEnricher;
 }

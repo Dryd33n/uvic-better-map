@@ -39,6 +39,9 @@ enrich list). The 3D-specific steps are custom enrichers:
   has rooms, merged into bands. Replaced the older `overhangs()` (still exported, not used).
 - `floorOutlines()` → `extras/floorOutlines.json`: each level's outline, for the floor plate.
 - `groundLines()` → `extras/groundLines.json`: ground layer outlines, unioned per group.
+- `foodOutlets()` names each food outlet's room (label + link) and tags the outlet with `room`/`level`;
+  `rooms: { Starbucks: 'CSR 050' }` sets one by hand. Art's Place and University Club have no
+  room: they show as a pinned spot on their building's ground floor.
 - `terrain()` (`src/terrain.mjs`) → `extras/terrain.json` (4 m heightfield) and `ground` on
   every building (Level 1 in metres above sea level), plus `grounds` per polygon for plan-less
   buildings that are several separate structures. `overrides: { CODE: metres }` sets one by hand.
@@ -49,13 +52,13 @@ enrich list). The 3D-specific steps are custom enrichers:
 - Local metres: x east, y north of the dataset origin. Scene is `(x, height, -y)`, heights
   relative to `terrain.ref` (ground at the origin). Storey = 4 m; level elevations come from the
   data (00 = -8, 0 = -4, 1 = 0, M = 2, 2 = 4, ...).
-- Look: high-tech and monochrome, dark by default with a light mode (`THEMES` in the viewer;
+- Look: high-tech and monochrome, dark by default with a light mode (`THEMES` in `app/campus/theme.ts`;
   panels use a class-based `dark:` variant from `app/globals.css`). White buildings with edge
   lines, one accent (cyan) for hover and selection, rooms as outlines (stairs and lifts filled).
 - The ground is three layers: dark fills drawn into a texture draped on the terrain (redrawn on a
   theme change), the layers' outlines as lines laid on the terrain (`extras/groundLines.json`:
   unioned per group by `groundLines()`, so no seams), and a faint 10 m / 100 m grid in the
-  terrain's shader. The texture's alpha is 0 under building footprints, cutting holes so uphill
+  terrain's shader (spacing and angle in the theme). The texture's alpha is 0 under building footprints, cutting holes so uphill
   ground can't poke through floor plans.
 - Each building is one mesh with two material groups: body (0) and foundation (1). It stands at
   `ground` + `PLINTH` (0.4 m); the foundation runs down below the lowest ground or level.
@@ -96,6 +99,9 @@ elevations above sea level). Open the debug panel to read coordinates, then **Co
 With a building selected, the panel can move it up or down (live preview, kept in localStorage).
 **Copy adjustments** gives `CODE: metres` lines for `terrain({ overrides })` in
 `config/sources.mjs`; the user pastes them here to make them permanent (then rebuild the data).
+The panel's theme editor (`theme-editor.tsx`) edits both themes live; colours are per theme, numbers
+(grid strength, spacing and angle, selected room fill) apply to both; scene and lighting numbers are per theme. **Copy theme changes** gives `dark.areas.roads: "#.." -> "#.."`
+lines for `THEMES` in `app/campus/theme.ts`.
 
 Run `npx tsc --noEmit -p .` and `npx eslint app/campus` after changes.
 
@@ -108,6 +114,12 @@ Run `npx tsc --noEmit -p .` and `npx eslint app/campus` after changes.
   floor, or search): highlighted, with their own info panel; `&r=CLE+A101` in a view link.
 - Stairs and lifts (room type 4, `S3`/`L57` repeat across levels) get icons but aren't linked
   between levels yet.
+- Info panels have an emergency section (`app/campus/emergency.tsx`): nearest AED, naloxone kit and
+  emergency phone
+  (map distance + 25 m per floor), each a link to it. No exits yet: UVic publishes no building
+  entrance data (checked every web map layer and their ArcGIS org, Oct 2026); the user chose to
+  skip exits rather than infer them.
+- Parking lot names (`lots` layer) are labels on the ground; floor plan markers win where they collide.
 - The lidar (Open Government Licence – Canada) needs an attribution line in the app before it's
   public; it's only in the data README so far.
 - NRCan also publishes a 1 m surface model (DSM) in the same bucket: real building heights could

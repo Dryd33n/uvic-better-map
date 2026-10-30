@@ -3,9 +3,9 @@
 import { useMemo, useState } from "react";
 import { PANEL } from "./ui";
 
-/** Something to find: a building, or a room in one. */
+/** Something to find: a building, a room in one, or a spot in one (a food outlet with no room). */
 export interface SearchItem {
-  kind: "building" | "room";
+  kind: "building" | "room" | "place";
   /** What's shown and matched first: "Clearihue Building", "A101", "Vertigo". */
   title: string;
   /** Shown under the title: "CLE A101 · Level 1", "CLE · Building 115". */
@@ -14,13 +14,20 @@ export interface SearchItem {
   terms: string;
   building: string;
   room?: { name: string; level: string };
+  /** Places: where in the building (local metres). */
+  at?: [number, number];
+  /** Classrooms: what people search for most, so they rank well above other rooms. */
+  classroom?: boolean;
 }
 
 const MAX_RESULTS = 8;
 const norm = (s: string) => s.toLowerCase().replace(/\s+/g, " ").trim();
+const byName = new Intl.Collator(undefined, { numeric: true, sensitivity: "base" });
 
-// Every word of the query must appear somewhere; exact and prefix matches on the title rank first,
-// then buildings before rooms, then shorter titles.
+// Every word of the query must appear somewhere. Ranked by how well it matches (exact, title
+// prefix, whole query somewhere, words scattered), then buildings, classrooms, other rooms, then
+// shorter titles and name order. A classroom also jumps one match tier, so it beats other rooms
+// that match a little better; nothing jumps into the exact tier.
 function search(items: SearchItem[], query: string): SearchItem[] {
   const q = norm(query);
   if (!q) return [];
@@ -31,12 +38,15 @@ function search(items: SearchItem[], query: string): SearchItem[] {
     const title = norm(item.title);
     const all = `${title} ${item.terms}`;
     if (!words.every((w) => all.includes(w)) && !all.replace(/ /g, "").includes(squashed)) continue;
-    const score =
-      (title === q || item.terms.split(" ").includes(q) ? 0 : title.startsWith(q) ? 1 : all.includes(q) ? 2 : 3) * 4 +
-      (item.kind === "building" ? 0 : 1);
+    const tier = title === q || item.terms.split(" ").includes(q) ? 0 : title.startsWith(q) ? 1 : all.includes(q) ? 2 : 3;
+    const kind = item.kind === "building" ? 0 : item.classroom ? 1 : 3;
+    const score = tier * 4 + kind - (item.classroom && tier > 0 ? 4 : 0);
     scored.push([score * 1000 + title.length, item]);
   }
-  return scored.sort((a, b) => a[0] - b[0]).slice(0, MAX_RESULTS).map(([, item]) => item);
+  return scored
+    .sort((a, b) => a[0] - b[0] || byName.compare(a[1].title, b[1].title))
+    .slice(0, MAX_RESULTS)
+    .map(([, item]) => item);
 }
 
 export default function SearchBox({ items, onPick }: { items: SearchItem[]; onPick(item: SearchItem): void }) {
@@ -105,7 +115,7 @@ export default function SearchBox({ items, onPick }: { items: SearchItem[]; onPi
               className={`flex cursor-pointer items-center gap-3 px-3 py-1.5 ${i === active ? "bg-black/5 dark:bg-white/10" : ""}`}
             >
               <span className="grid h-6 w-6 shrink-0 place-items-center rounded bg-zinc-200 font-mono text-[10px] text-zinc-600 dark:bg-white/10 dark:text-zinc-300">
-                {item.kind === "building" ? "B" : "R"}
+                {item.kind === "building" ? "B" : item.kind === "room" ? "R" : "P"}
               </span>
               <span className="min-w-0">
                 <span className="block truncate text-sm text-zinc-900 dark:text-zinc-100">{item.title}</span>

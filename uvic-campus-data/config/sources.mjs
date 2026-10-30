@@ -5,7 +5,7 @@
 // Add a layer, add a field, pull from your own GeoJSON, add an enricher or an
 // output format: see docs/EXTENDING.md for recipes.
 // ─────────────────────────────────────────────────────────────────────────────
-import { washroomDetails, heightsFromFloors, massing, floorOutlines, groundLines } from '../src/enrichers.mjs';
+import { washroomDetails, heightsFromFloors, massing, floorOutlines, groundLines, foodOutlets } from '../src/enrichers.mjs';
 import { terrain } from '../src/terrain.mjs';
 
 const ARCGIS = 'https://services2.arcgis.com/qRqOFxxnwUHOSocZ/arcgis/rest/services';
@@ -117,6 +117,9 @@ export default {
     heightsFromFloors({ roof: 0.5 }),
     massing(), // each storey where its floor plan reaches (wings, skyways), for 3D
     floorOutlines(), // each level's outline, for floor plates under the rooms
+    // Outlet names and links onto their rooms (JCC B112 -> Mystic Market). Starbucks is on the
+    // lower level: UVic's AED and naloxone notes say "Lower Level (Starbucks)".
+    foodOutlets({ rooms: { Starbucks: 'CSR 050' } }),
     // The ground layers as outlines, for the 3D map's line drawing.
     groundLines({
       groups: {

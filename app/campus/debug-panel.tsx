@@ -1,6 +1,8 @@
 "use client";
 
 import { useState } from "react";
+import ThemeEditor from "./theme-editor";
+import type { ThemeEdits, ThemeName } from "./theme";
 import { PANEL } from "./ui";
 
 /** A point on the map: local metres (x east, y north of the dataset origin), WGS84, metres above sea level. */
@@ -181,12 +183,20 @@ export default function DebugPanel({
   onClearPin,
   onGroundOffset,
   onClearGroundOffsets,
+  theme,
+  onTheme,
+  themeEdits,
+  onThemeEdits,
 }: {
   snapshot: DebugSnapshot | null;
   onClose(): void;
   onClearPin(): void;
   onGroundOffset(metres: number): void;
   onClearGroundOffsets(): void;
+  theme: ThemeName;
+  onTheme(theme: ThemeName): void;
+  themeEdits: Record<ThemeName, ThemeEdits>;
+  onThemeEdits(edits: Record<ThemeName, ThemeEdits>): void;
 }) {
   const [note, setNote] = useState("");
   const [copied, setCopied] = useState<string | null>(null);
@@ -284,6 +294,7 @@ export default function DebugPanel({
         </button>
       </div>
       <p className="mt-1.5 h-4 font-sans text-[11px] text-zinc-500">{copied ?? "Click the map to pin a point. ` toggles this panel."}</p>
+      <ThemeEditor theme={theme} onTheme={onTheme} edits={themeEdits} onEdits={onThemeEdits} onCopy={(text) => void flash("Theme changes copied", text)} />
     </aside>
   );
 }

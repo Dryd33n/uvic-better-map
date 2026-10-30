@@ -17,6 +17,8 @@ export const ICONS = {
   aed: svg(`<path d="M12 20.5S3.5 15.5 3.5 9.2A4.4 4.4 0 0 1 12 6.8a4.4 4.4 0 0 1 8.5 2.4c0 6.3-8.5 11.3-8.5 11.3z"/><path fill="currentColor" stroke="none" d="M12.8 8.5l-3.6 5.2h2.7l-.9 4 3.6-5.3h-2.7z"/>`),
   naloxone: svg(`<rect x="3.5" y="7" width="17" height="13" rx="2"/><path d="M9 7V4.5h6V7M12 10.5v6M9 13.5h6"/>`),
   shower: svg(`<path d="M5 21V9a4 4 0 0 1 8 0"/><path d="M9.5 10h7"/><circle cx="11" cy="14" r="1" fill="currentColor" stroke="none"/><circle cx="15" cy="14" r="1" fill="currentColor" stroke="none"/><circle cx="13" cy="17.5" r="1" fill="currentColor" stroke="none"/><circle cx="17" cy="17.5" r="1" fill="currentColor" stroke="none"/>`),
+  phone: svg(`<path d="M6.5 3.5h3l1.5 4-2 1.5a11 11 0 0 0 6 6l1.5-2 4 1.5v3a2 2 0 0 1-2 2A16 16 0 0 1 4.5 5.5a2 2 0 0 1 2-2z"/>`),
+  parking: svg(`<rect x="3.5" y="3.5" width="17" height="17" rx="3"/><path d="M9.5 17V7h3.5a3 3 0 0 1 0 6H9.5"/>`),
   microwave: svg(`<rect x="2.5" y="5.5" width="19" height="13" rx="1.5"/><rect x="5.5" y="8.5" width="9" height="7" rx="0.5"/><path d="M18 9.5v.01M18 12.5v.01"/>`),
 } as const;
 
